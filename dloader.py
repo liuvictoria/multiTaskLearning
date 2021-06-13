@@ -54,5 +54,6 @@ class MRIDataset(Dataset):
         return masked_kspace, mask.byte(), sens, im_true
 
 
-def genDataLoader(dset, shuffle=True):
+def genDataLoader(root, shuffle=True):
+    dset = MRIDataset(root=root)
     return DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=16)
