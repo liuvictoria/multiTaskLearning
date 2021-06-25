@@ -1,1 +1,9 @@
 *.pyc
+nohup.out
+.vscode/settings.json
+*.json
+.ipynb_checkpoints
+.vscode
+*__pycache__
+*.pt
+/runs/
