@@ -22,8 +22,13 @@ class MRIDataset(Dataset):
         self.rng = np.random.default_rng(seed)
         self.examples = []
         self.ratios = {}
+        self.contrasts = {}
         for idx, root in enumerate(roots):
+            # update contrast dict
             contrast = root.split('/')[-2]
+            if contrast not in self.contrasts:
+                self.contrasts[contrast] = len(self.contrasts)
+                
             Files = list(pathlib.Path(root).glob('*.h5'))
             # subsample files
             Files = self.subset_sample(Files, scarcities[idx])
@@ -79,4 +84,4 @@ class MRIDataset(Dataset):
 
 def genDataLoader(roots, scarcities, seed=123, shuffle=True):
     dset = MRIDataset(roots=roots, scarcities=scarcities, seed=seed)
-    return DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=16)
+    return (DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=16), dset.ratios)
