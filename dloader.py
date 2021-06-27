@@ -17,7 +17,7 @@ class MRIDataset(Dataset):
 
     def __init__(
         self, roots, scarcities, seed,
-        center_fractions=[0.06, 0.06, 0.06], accelerations=[4, 5, 6]
+        center_fractions=[0.06, 0.06, 0.06], accelerations=[6, 6, 6]
     ):
         self.rng = np.random.default_rng(seed)
         self.examples = []
@@ -32,15 +32,19 @@ class MRIDataset(Dataset):
             Files = list(pathlib.Path(root).glob('*.h5'))
             # subsample files
             Files = self.subset_sample(Files, scarcities[idx])
-            self.ratios[contrast] = len(Files)
-
+            
+            # track file count for ratios
+            file_count = 0
             # individual slices
             for fname in Files:
                 h5file = h5py.File(fname, 'r')
                 kspace = h5file['kspace']
                 nsl = kspace.shape[0]  # get number of slices
                 self.examples += [(fname, sl, contrast) for sl in range(nsl)]
+                file_count += nsl
 
+            self.ratios[contrast] = file_count
+            
         self.mask_func = subsample.EquispacedMaskFunc(
             center_fractions=center_fractions, accelerations=accelerations
         )
