@@ -50,22 +50,28 @@ parser.add_argument(
 
 # dataset properties
 parser.add_argument(
+    '--datadir', default='/mnt/dense/vliu/summer_dset/',
+    help='data root directory; where are datasets contained'
+)
+
+parser.add_argument(
     '--datasets', nargs='+',
-    help='names of one or two sets of data files i.e. div_coronal_pd',
+    help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
     required = True
 )
 parser.add_argument(
     '--scarcities', default=[0, 1, 2, 3], type=int, nargs='+',
-    help='number of samples in second contrast will be decreased by 1/2^N'
+    help='number of samples in second contrast will be decreased by 1/2^N; i.e. 0 1 2'
     )
 parser.add_argument(
     '--accelerations', default=[6], type=int, nargs='+',
-    help='undersampling factor of k-space'
+    help='list of undersampling factor of k-space; match with centerfracs'
     )
 parser.add_argument(
     '--centerfracs', default=[0.06], type=int, nargs='+',
-    help='center fractions sampled of k-space'
+    help='list of center fractions sampled of k-space; match with accelerations'
     )
+
 
 
 # save / display data
@@ -195,15 +201,15 @@ writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
     basedirs = [
-        f'/mnt/dense/vliu/summer_dset/{dataset_name}'
-        for dataset_name in opt.datasets
+        os.path.join(opt.datadir, dataset)
+        for dataset in opt.datasets
     ]
     
     for scarcity in opt.scarcities:
         print(f'experiment w scarcity {scarcity}')
         train_dloader = genDataLoader(
             [f'{basedir}/Train' for basedir in basedirs], # choose randomly
-            [0, scarcity], # downsample
+            [scarcity, 0], # downsample
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
         )

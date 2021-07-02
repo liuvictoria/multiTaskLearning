@@ -140,147 +140,148 @@ def _param_dict(lr, epochs, numblocks, undersampling, center_fractions):
     return params
 
 
-def write_tensorboard(writer, avg_cost, model, ratio, opt):
-    writer.add_text(
-        'parameters', 
-        f'{count_parameters(model)} parameters'
-    )
-    
-    ###opts###
-    writer.add_hparams(
-        _param_dict(
-            opt.lr, opt.epochs, opt.numblocks, 
-            opt.accelerations, opt.centerfracs
-        ), 
-        {'zdummy':0}
-    )
-    
-    if len(avg_cost.keys()) == 2:
-        write_tensorboard_one_contrasts(
-            writer, avg_cost, ratio, opt
-        )
-    else:
-        write_tensorboard_two_contrasts(
-            writer, avg_cost, ratio, opt
+def write_tensorboard(writer, cost, epoch, model, ratio, opt):
+    if epoch == 0:
+        writer.add_text(
+            'parameters', 
+            f'{count_parameters(model)} parameters'
         )
 
+        ###opts###
+        writer.add_hparams(
+            _param_dict(
+                opt.lr, opt.epochs, opt.numblocks, 
+                opt.accelerations, opt.centerfracs
+            ), 
+            {'zdummy':0}
+    )
+    if epoch >= 2:
+        if len(opt.datasets) == 1:
+            write_tensorboard_one_contrasts(
+                writer, cost, epoch, ratio, opt
+            )
+        else:
+            write_tensorboard_two_contrasts(
+                writer, cost, epoch, ratio, opt
+            )
 
-def write_tensorboard_two_contrasts(writer, avg_cost, ratio, opt):
-    #write to tensorboard ###opt###
+
+def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt):
+    # write to tensorboard ###opt###
     contrast_1, contrast_2 = opt.datasets
+    # for display purposes
+    epoch += 1 
+
+    writer.add_scalars(
+        f'{ratio}/l1', {
+            f'train/{contrast_1}' : cost[contrast_1][0],
+            f'val/{contrast_1}' : cost[contrast_1][4],
+            f'train/{contrast_2}' : cost[contrast_2][0],
+            f'val/{contrast_2}' : cost[contrast_2][4],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        f'{ratio}/ssim', {
+            f'train/{contrast_1}' : cost[contrast_1][1],
+            f'val/{contrast_1}' : cost[contrast_1][5],
+            f'train/{contrast_2}' : cost[contrast_2][1],
+            f'val/{contrast_2}' : cost[contrast_2][5],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        f'{ratio}/psnr', {
+            f'train/{contrast_1}' : cost[contrast_1][2],
+            f'val/{contrast_1}' : cost[contrast_1][6],
+            f'train/{contrast_2}' : cost[contrast_2][2],
+            f'val/{contrast_2}' : cost[contrast_2][6],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        f'{ratio}/nrmse', {
+            f'train/{contrast_1}' : cost[contrast_1][3],
+            f'val/{contrast_1}' : cost[contrast_1][7],
+            f'train/{contrast_2}' : cost[contrast_2][3],
+            f'val/{contrast_2}' : cost[contrast_2][7],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        'overall/l1', {
+            f'val/{ratio}/{contrast_1}' : cost[contrast_1][4],
+            f'val/{ratio}/{contrast_2}' : cost[contrast_2][4],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        'overall/ssim', {
+            f'val/{ratio}/{contrast_1}' : cost[contrast_1][5],
+            f'val/{ratio}/{contrast_2}' : cost[contrast_2][5],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        'overall/psnr', {
+            f'val/{ratio}/{contrast_1}' : cost[contrast_1][6],
+            f'val/{ratio}/{contrast_2}' : cost[contrast_2][6],
+        }, 
+        epoch
+    )
+
+    writer.add_scalars(
+        'overall/nrmse', {
+            f'val/{ratio}/{contrast_1}' : cost[contrast_1][7],
+            f'val/{ratio}/{contrast_2}' : cost[contrast_2][7],
+        }, 
+        epoch
+    )
+
+
     
-    for epoch in range(2, opt.epochs): ###opt###
-        writer.add_scalars(
-            f'{ratio}/l1', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 0],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 4],
-                f'train/{contrast_2}' : avg_cost[contrast_2][epoch, 0],
-                f'val/{contrast_2}' : avg_cost[contrast_2][epoch, 4],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            f'{ratio}/ssim', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 1],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 5],
-                f'train/{contrast_2}' : avg_cost[contrast_2][epoch, 1],
-                f'val/{contrast_2}' : avg_cost[contrast_2][epoch, 5],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            f'{ratio}/psnr', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 2],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 6],
-                f'train/{contrast_2}' : avg_cost[contrast_2][epoch, 2],
-                f'val/{contrast_2}' : avg_cost[contrast_2][epoch, 6],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            f'{ratio}/nrmse', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 3],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 7],
-                f'train/{contrast_2}' : avg_cost[contrast_2][epoch, 3],
-                f'val/{contrast_2}' : avg_cost[contrast_2][epoch, 7],
-            }, 
-            epoch
-        )
-        
-        writer.add_scalars(
-            'overall/l1', {
-                f'val/{ratio}/{contrast_1}' : avg_cost[contrast_1][epoch, 4],
-                f'val/{ratio}/{contrast_2}' : avg_cost[contrast_2][epoch, 4],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            'overall/ssim', {
-                f'val/{ratio}/{contrast_1}' : avg_cost[contrast_1][epoch, 5],
-                f'val/{ratio}/{contrast_2}' : avg_cost[contrast_2][epoch, 5],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            'overall/psnr', {
-                f'val/{ratio}/{contrast_1}' : avg_cost[contrast_1][epoch, 6],
-                f'val/{ratio}/{contrast_2}' : avg_cost[contrast_2][epoch, 6],
-            }, 
-            epoch
-        )
-
-        writer.add_scalars(
-            'overall/nrmse', {
-                f'val/{ratio}/{contrast_1}' : avg_cost[contrast_1][epoch, 7],
-                f'val/{ratio}/{contrast_2}' : avg_cost[contrast_2][epoch, 7],
-            }, 
-            epoch
-        )
-
-
-    
-def write_tensorboard_one_contrasts(writer, avg_cost, total_epochs, ratio, opt):
+def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
     #write to tensorboard ###opt###
-    contrast_1, = opt.datasets[0]
-    
-    for epoch in opt.epochs:
+    contrast_1 = opt.datasets[0]
+    epoch += 1
         
-        writer.add_scalars(
-            f'{ratio}/l1', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 0],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 4],
-            }, 
-            epoch
-        )
+    writer.add_scalars(
+        f'{ratio}/l1', {
+            f'train/{contrast_1}' : cost[contrast_1][0],
+            f'val/{contrast_1}' : cost[contrast_1][4],
+        }, 
+        epoch
+    )
 
-        writer.add_scalars(
-            f'{ratio}/ssim', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 1],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 5],
-            }, 
-            epoch
-        )
+    writer.add_scalars(
+        f'{ratio}/ssim', {
+            f'train/{contrast_1}' : cost[contrast_1][1],
+            f'val/{contrast_1}' : cost[contrast_1][5],
+        }, 
+        epoch
+    )
 
-        writer.add_scalars(
-            f'{ratio}/psnr', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 2],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 6],
-            }, 
-            epoch
-        )
+    writer.add_scalars(
+        f'{ratio}/psnr', {
+            f'train/{contrast_1}' : cost[contrast_1][2],
+            f'val/{contrast_1}' : cost[contrast_1][6],
+        }, 
+        epoch
+    )
 
-        writer.add_scalars(
-            f'{ratio}/nrmse', {
-                f'train/{contrast_1}' : avg_cost[contrast_1][epoch, 3],
-                f'val/{contrast_1}' : avg_cost[contrast_1][epoch, 7],
-            }, 
-            epoch
-        )
+    writer.add_scalars(
+        f'{ratio}/nrmse', {
+            f'train/{contrast_1}' : cost[contrast_1][3],
+            f'val/{contrast_1}' : cost[contrast_1][7],
+        }, 
+        epoch
+    )
 
 
 
@@ -301,25 +302,25 @@ def single_task_trainer(
     optimizer, scheduler,
     opt
 ):
-    
+    # convenience
     contrast_count = len(opt.datasets)
+    train_batch = len(train_loader)
+    val_batch = len(val_loader)
+    
     ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
     best_val_loss = np.infty
-   
-    # contains info for all epochs and contrasts
-    avg_cost = {
-        contrast : np.zeros([opt.epochs, 8])
-        for contrast in opt.datasets
-    }
-    avg_cost['overall'] = np.zeros([opt.epochs, 8])
     
     for epoch in range(opt.epochs):
-        # contains info for single batch of a single epoch
-        cost = np.zeros(8, dtype = np.float32)
+        # contains info for single epoch
+        cost = {
+            contrast : np.zeros(8)
+            for contrast in opt.datasets
+        }
+        cost['overall'] = np.zeros(8)
 
         # train the data
         single_task_model.train()
-        train_batch = len(train_loader)
+        
         train_dataset = iter(train_loader)
         
         for kspace, mask, sens, im_fs, contrast in train_dataset:
@@ -333,21 +334,19 @@ def single_task_trainer(
             loss.backward()
             optimizer.step()
             
-            # losses and metrics are averaged over epoch
+            # losses and metrics are averaged over epoch at the end 
             # L1 loss for now
-            cost[0] = loss.item() 
+            cost[contrast][0] += loss.item() 
+            
             # ssim, psnr, nrmse
-            cost[1], cost[2], cost[3] = metrics(im_fs, im_us)
-
-            # update overall
-            avg_cost[contrast][epoch, :4] += cost[:4] / train_ratios[contrast]
-            avg_cost['overall'][epoch, :4] += cost[:4] / train_batch
+            ssim, psnr, nrmse = metrics(im_fs, im_us)
+            for j in range(3):
+                cost[contrast][j + 1] += metrics(im_fs, im_us)[j]
 
         
         # get losses and metrics for each epoch
         single_task_model.eval()
         with torch.no_grad():
-            val_batch = len(val_loader)
         
             # validation data
             val_dataset = iter(val_loader)
@@ -360,14 +359,14 @@ def single_task_trainer(
                 _, im_us = single_task_model(kspace, mask, sens) # forward pass
                 loss = criterion(im_fs, im_us)
                 
+                # losses and metrics are averaged over epoch at the end 
                 # L1 loss for now
-                cost[4] = loss.item()
+                cost[contrast][4] += loss.item() 
+
                 # ssim, psnr, nrmse
-                cost[5], cost[6], cost[7] = metrics(im_fs, im_us)
-                
-                # update overall
-                avg_cost[contrast][epoch, 4:] += cost[4:] / val_ratios[contrast]
-                avg_cost['overall'][epoch, 4:] += cost[4:] / val_batch
+                ssim, psnr, nrmse = metrics(im_fs, im_us)
+                for j in range(3):
+                    cost[contrast][j + 5] += metrics(im_fs, im_us)[j]
                 
                # visualize reconstruction every few epochs
                 if opt.tensorboard and epoch % opt.savefreq == 0: ###opt###
@@ -381,10 +380,22 @@ def single_task_trainer(
                             plot_quadrant(im_fs, im_us),
                             epoch, close = True,
                         )                    
-                
+
+        # update overall
+        cost['overall'] = np.sum([cost[contrast] for contrast in opt.datasets], axis = 0)
+        cost["overall"][:4] /= train_batch
+        cost["overall"][4:] /= val_batch
+        
+        # average out
+        for contrast in opt.datasets:
+            cost[contrast][:4] /= train_ratios[contrast]
+            cost[contrast][4:] /= val_ratios[contrast]
+            
+
+        
         # early stopping        
-        if avg_cost['overall'][epoch, 4] < best_val_loss:
-            best_val_loss = avg_cost['overall'][epoch, 4]
+        if cost['overall'][4] < best_val_loss:
+            best_val_loss = cost['overall'][4]
             filedir = f"models/{opt.experimentname}_{opt.network}_{'_'.join(opt.datasets)}"
             if not os.path.isdir(filedir):
                 os.makedirs(filedir)
@@ -398,12 +409,13 @@ def single_task_trainer(
         if opt.verbose:
             print(f'''
             >Epoch: {epoch + 1:04d}
-            TRAIN: loss {avg_cost['overall'][epoch, 0]:.4f} | ssim {avg_cost['overall'][epoch, 1]:.4f} | psnr {avg_cost['overall'][epoch, 2]:.4f} | nrmse {avg_cost['overall'][epoch, 3]:.4f} 
-            VAL: loss {avg_cost['overall'][epoch, 4]:.4f} | ssim {avg_cost['overall'][epoch, 5]:.4f} | psnr {avg_cost['overall'][epoch, 6]:.4f} | nrmse {avg_cost['overall'][epoch, 7]:.4f}
+            TRAIN: loss {cost['overall'][0]:.4f} | ssim {cost['overall'][1]:.4f} | psnr {cost['overall'][2]:.4f} | nrmse {cost['overall'][3]:.4f} 
+            VAL: loss {cost['overall'][4]:.4f} | ssim {cost['overall'][5]:.4f} | psnr {cost['overall'][6]:.4f} | nrmse {cost['overall'][7]:.4f}
 
             ''')
     
-    # write to tensorboard
-    ###opt###
-    if opt.tensorboard:
-        write_tensorboard(writer, avg_cost, single_task_model, ratio, opt)   
+        # write to tensorboard
+        ###opt###
+        if opt.tensorboard:
+            write_tensorboard(writer, cost, epoch, single_task_model, ratio, opt)  
+    
