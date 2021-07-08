@@ -32,6 +32,10 @@ parser.add_argument(
     '--lr', default=0.0002, type=float,
     help='learning rate'
 )
+parser.add_argument(
+    '--sharedtrunk', default=0.5, type=float,
+    help='learning rate'
+)
 
 
 # model training
@@ -169,26 +173,71 @@ class VarNet(nn.Module):
     def __init__(
         self,
         num_cascades: int = opt.numblocks,
+        shared_frac: float = opt.sharedtrunk
         chans: int = 18,
         pools: int = 4,
     ):
         super().__init__()
 
-        self.cascades = nn.ModuleList(
-            [VarNetBlock(NormUnet(chans, pools)) for _ in range(num_cascades)]
+        shared_blocks, task_blocks = get_block_count(
+            num_cascades, shared_frac
         )
+        
+        # define shared trunk
+        self.trunk = nn.ModuleList(
+            [VarNetBlock(NormUnet(chans, pools)) for _ in range(shared_blocks)]
+        )
+        
+        # define task specific layers
+        self.pred_contrast1 = nn.ModuleList(
+            [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
+        )
+        self.pred_contrast2 = nn.ModuleList(
+            [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
+        )
+    
+    def get_block_count(
+        num_cascades: int,
+        shared_frac: float,
+    ):
+        shared_blocks = np.floor(num_cascades * shared_frac)
+        
+        # if untaken blocks can be split evenly:
+        if (num_cascades - shared_blocks) % 2 == 0:
+            return (
+                int(shared_blocks), 
+                int((num_cascades - shared_blocks) / 2)
+            )
+        
+        # untakn blocks can't be split evenly
+        else:
+            return (
+                int(shared_blocks + 1), 
+                int((num_cascades - shared_blocks - 1) / 2)
+            )
+        
         
     def forward(
         self,
         masked_kspace: torch.Tensor, 
         mask: torch.Tensor,
-        esp_maps: torch.Tensor
+        esp_maps: torch.Tensor,
+        contrast: string,
+        
     ) -> torch.Tensor:
         
         kspace_pred = masked_kspace.clone()
 
-        for cascade in self.cascades:
+        for cascade in self.trunk:
             kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
+            
+        if contrast == opt.datasets[0]:
+            for cascade in self.pred_contrast1:
+                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
+                
+        elif contrast == opt.datasets[1]:
+            for cascade in self.pred_contrast2:
+                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
         
         im_coil = fastmri.ifft2c(kspace_pred)
         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(

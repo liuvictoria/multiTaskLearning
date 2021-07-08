@@ -7,3 +7,6 @@ nohup.out
 *__pycache__
 *.pt
 /runs/
+/plots/
+runs_sens/
+/models/
