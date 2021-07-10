@@ -27,6 +27,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    '--trunkblocks', type=int,
+    help='number of unrolled blocks in trunk; only for MTL; for STL, use 0',
+    required = True
+)
+
+
+parser.add_argument(
     '--device', default='cuda:2',
     help='cuda:2 device default'
 )
@@ -45,7 +52,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--datasets', nargs='+',
-    help='''names of one or two sets of data files 
+    help='''names of two sets of data files 
         i.e. div_coronal_pd_fs div_coronal_pd; 
         input the downsampled dataset first''',
     required = True
@@ -89,10 +96,8 @@ opt = parser.parse_args()
 ### global variables ###
 
 # add to this every time new model is trained
-if 'STL' in opt.experimentnames and opt.network == 'varnet':
-    from models import STLVarNet
-    with torch.no_grad():
-        the_model = STLVarNet().to(opt.device)
+from models import STLVarNet
+from models import MTLVarNet
         
         
 # preliminary plot initialization / colors
@@ -168,8 +173,12 @@ def df_single_contrast_all_models(
                     kspace, mask = kspace.to(opt.device), mask.to(opt.device)
                     esp_maps, im_fs = esp_maps.to(opt.device), im_fs.to(opt.device)
 
-                    _, im_us = the_model(kspace, mask, esp_maps) # forward pass
-
+                    # forward pass
+                    if 'STL' in opt.experimentnames:
+                        _, im_us = the_model(kspace, mask, esp_maps) 
+                    elif 'MTL' in opt.experimentnames:
+                        _, im_us = the_model(kspace, mask, esp_maps, contrast)
+                    
                     # L1 loss
                     loss = criterion(im_fs, im_us)
                     df_row[idx_model, 0] += loss.item() / test_batch
@@ -189,7 +198,6 @@ def df_single_contrast_all_models(
             ratio_1 = int(model.split('_')[0].split('=')[1])
             df_row[idx_model, 4] = ratio_1
 
-            
             if opt.mixeddata:
                 ratio_2 = int(model.split('_')[1].split('=')[1])
                 df_row[idx_model, 5] = ratio_2
@@ -209,7 +217,7 @@ def save_bokeh_plots(writer):
         # test loader for this one contrast
         test_dloader = genDataLoader(
             [f'{basedir}/Test'],
-            [0, 0],
+            [4, 4], ####
             shuffle = False,
         )
 
@@ -218,11 +226,24 @@ def save_bokeh_plots(writer):
 
             # normally, we are in mixeddata case
             if opt.mixeddata:
-                model_filedir = f"models/{experimentname}_{opt.network}_{'_'.join(opt.datasets)}"
-            # only for STL where data are not mixed; 
+                # MTL (experimental)
+                if opt.trunkblocks != 0:
+                    model_filedir = f"models/{experimentname}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}"
+                # STL mixed (control)
+                else:
+                    model_filedir = f"models/{experimentname}_{opt.network}_{'_'.join(opt.datasets)}"
+            # only for STL where data are not mixed (control)
             else:
                 model_filedir = f"models/{experimentname}_{opt.network}_{dataset}"
  
+            # figure out which model skeleton to use
+            if 'STL' in experimentname:
+                with torch.no_grad():
+                    the_model = STLVarNet().to(opt.device)
+            elif 'MTL' in experimentname:
+                with torch.no_grad():
+                    the_model = MTLVarNet().to(opt.device)
+
             # get df for all ratios of a particular model, for a single contrast
             df = df_single_contrast_all_models(
                 the_model, test_dloader, model_filedir, dataset, writer
@@ -258,7 +279,11 @@ def save_bokeh_plots(writer):
         
     if opt.createplots:     
         # customize and save plots
-        plotdir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}_{'_'.join(opt.datasets)}"
+        if opt.trunkblocks != 0:
+            plotdir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}"
+        else:
+            plotdir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}_{'_'.join(opt.datasets)}"
+            
         if not os.path.isdir(plotdir):
             os.makedirs(plotdir)
 
@@ -282,9 +307,19 @@ def save_bokeh_plots(writer):
 
 
 
+
+
+# main
+if opt.trunkblocks != 0:
+    log_dir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}"
+else:
+    log_dir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}_{'_'.join(opt.datasets)}"
+            
+
+
 if opt.tensorboard:
     writer_tensorboard = SummaryWriter(
-        log_dir = f"plots/{'_'.join(opt.experimentnames)}_{opt.network}_{'_'.join(opt.datasets)}",
+        log_dir = log_dir,
         max_queue = 20,
         flush_secs = 1,
     )

@@ -185,7 +185,7 @@ def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
                 _param_dict_MTL( # use MTL param dict
                     opt.lr, opt.epochs, opt.numblocks, 
                     opt.accelerations, opt.centerfracs,
-                    opt.sharedtrunk, opt.weighting
+                    opt.trunkblocks, opt.weighting
                 ), 
                 {'zdummy':0}
             )
@@ -280,7 +280,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
         epoch
     )
 
-    if weights != None:
+    if weights is not None:
         writer.add_scalars(
             f'{ratio}/weighting', {
                 f'{contrast_1}' : weights[contrast_1],

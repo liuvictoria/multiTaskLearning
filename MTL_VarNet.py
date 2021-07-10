@@ -152,10 +152,7 @@ class VarNetBlock(nn.Module):
 
         return current_kspace - soft_dc - model_term
     
-    
-
-    
-# now we can stack VarNetBlocks to make a unrolled VarNet (with 10 blocks)
+   
 
 
 class VarNet(nn.Module):
@@ -226,7 +223,7 @@ class VarNet(nn.Module):
 """    
 
 # datasets
-run_name = f"runs/{opt.experimentname}_{opt.network}_{'_'.join(opt.datasets)}/"
+run_name = f"runs/{opt.experimentname}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}/"
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
@@ -239,7 +236,7 @@ def main(opt):
         print(f'experiment w scarcity {scarcity}')
         train_dloader = genDataLoader(
             [f'{basedir}/Train' for basedir in basedirs],
-            [scarcity, 4], # downsample
+            [scarcity, 0], # downsample
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = True,
@@ -247,7 +244,7 @@ def main(opt):
 
         val_dloader = genDataLoader(
             [f'{basedir}/Val' for basedir in basedirs],
-            [4, 4], # no downsampling
+            [0, 0], # no downsampling
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = False, # no shuffling to allow visualization
