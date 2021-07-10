@@ -1,3 +1,0 @@
-numpy==1.18.5
--e git+https://github.com/facebookresearch/fastMRI.git@0f538a353e4a5c855012b8f982f756d489d11462#egg=fastmri
--e git+https://github.com/mikgroup/sigpy.git@e7f1ba2c3a1fabf95fde2e42956794cb4493c043#egg=sigpy

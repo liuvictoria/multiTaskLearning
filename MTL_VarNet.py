@@ -13,9 +13,7 @@ from fastmri.models.varnet import *
 from torch.utils.tensorboard import SummaryWriter
 
 from dloader import genDataLoader
-from utils import criterion, metrics
-from utils import plot_quadrant, write_tensorboard
-from utils import single_task_trainer
+from wrappers import multi_task_trainer
 
 
 # command line argument parser
@@ -32,20 +30,25 @@ parser.add_argument(
     '--lr', default=0.0002, type=float,
     help='learning rate'
 )
-parser.add_argument(
-    '--sharedtrunk', default=0.5, type=float,
-    help='learning rate'
-)
+
 
 
 # model training
 parser.add_argument(
+    '--trunkblocks', default=10, type=int,
+    help='number of unrolled blocks in trunk'
+)
+parser.add_argument(
     '--numblocks', default=12, type=int,
-    help='number of unrolled blocks in total'
+    help='number of unrolled blocks in total for one forward pass'
 )
 parser.add_argument(
     '--network', default='varnet',
     help='type of network ie unet or varnet'
+)
+parser.add_argument(
+    '--weighting', default='naive',
+    help='naive, uncert, dwa, pareto'
 )
 parser.add_argument(
     '--device', default='cuda:2',
@@ -59,13 +62,6 @@ parser.add_argument(
     '--datadir', default='/mnt/dense/vliu/summer_dset/',
     help='data root directory; where are datasets contained'
 )
-
-parser.add_argument(
-    '--mixeddata', default=True, type=bool,
-    help='''If true, the model trained on mixed data;
-        almost always true except for STL trained on single contrast'''
-)
-
 parser.add_argument(
     '--datasets', nargs='+',
     help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
@@ -173,15 +169,13 @@ class VarNet(nn.Module):
     def __init__(
         self,
         num_cascades: int = opt.numblocks,
-        shared_frac: float = opt.sharedtrunk
+        shared_blocks: int = opt.trunkblocks,
         chans: int = 18,
         pools: int = 4,
     ):
         super().__init__()
 
-        shared_blocks, task_blocks = get_block_count(
-            num_cascades, shared_frac
-        )
+        task_blocks = num_cascades - shared_blocks
         
         # define shared trunk
         self.trunk = nn.ModuleList(
@@ -195,35 +189,14 @@ class VarNet(nn.Module):
         self.pred_contrast2 = nn.ModuleList(
             [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
         )
-    
-    def get_block_count(
-        num_cascades: int,
-        shared_frac: float,
-    ):
-        shared_blocks = np.floor(num_cascades * shared_frac)
-        
-        # if untaken blocks can be split evenly:
-        if (num_cascades - shared_blocks) % 2 == 0:
-            return (
-                int(shared_blocks), 
-                int((num_cascades - shared_blocks) / 2)
-            )
-        
-        # untakn blocks can't be split evenly
-        else:
-            return (
-                int(shared_blocks + 1), 
-                int((num_cascades - shared_blocks - 1) / 2)
-            )
-        
+
         
     def forward(
         self,
         masked_kspace: torch.Tensor, 
         mask: torch.Tensor,
         esp_maps: torch.Tensor,
-        contrast: string,
-        
+        contrast: str,
     ) -> torch.Tensor:
         
         kspace_pred = masked_kspace.clone()
@@ -265,16 +238,16 @@ def main(opt):
     for scarcity in opt.scarcities:
         print(f'experiment w scarcity {scarcity}')
         train_dloader = genDataLoader(
-            [f'{basedir}/Train' for basedir in basedirs], # choose randomly
-            [scarcity, 0], # downsample
+            [f'{basedir}/Train' for basedir in basedirs],
+            [scarcity, 4], # downsample
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = True,
         )
 
         val_dloader = genDataLoader(
-            [f'{basedir}/Val' for basedir in basedirs], # choose randomly
-            [0, 0], # no downsampling
+            [f'{basedir}/Val' for basedir in basedirs],
+            [4, 4], # no downsampling
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = False, # no shuffling to allow visualization
@@ -288,7 +261,7 @@ def main(opt):
         optimizer = torch.optim.Adam(varnet.parameters(),lr = opt.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
         print('start training')
-        single_task_trainer(
+        multi_task_trainer(
             train_dloader[0], val_dloader[0], 
             train_dloader[1], val_dloader[1], # ratios dicts
             varnet, device, writer_tensorboard,

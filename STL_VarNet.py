@@ -13,9 +13,7 @@ from fastmri.models.varnet import *
 from torch.utils.tensorboard import SummaryWriter
 
 from dloader import genDataLoader
-from utils import criterion, metrics
-from utils import plot_quadrant, write_tensorboard
-from utils import single_task_trainer
+from wrappers import single_task_trainer
 
 
 # command line argument parser

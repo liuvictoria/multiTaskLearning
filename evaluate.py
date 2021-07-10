@@ -89,7 +89,7 @@ opt = parser.parse_args()
 ### global variables ###
 
 # add to this every time new model is trained
-if 'STL' in opt.experimentnames and opt.network == 'varnet' or 'tests' in opt.experimentnames:
+if 'STL' in opt.experimentnames and opt.network == 'varnet':
     from models import STLVarNet
     with torch.no_grad():
         the_model = STLVarNet().to(opt.device)
@@ -199,11 +199,6 @@ def df_single_contrast_all_models(
         df_row,
         columns=columns
     )
-
-
-
-##### add mri images as well (as if for group meetings) images + metric plots
-##### why are we combining datasets at the same time? support hypothesis of MTL
 
 
 def save_bokeh_plots(writer):
