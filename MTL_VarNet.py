@@ -111,7 +111,7 @@ parser.add_argument(
     help='if true, creates TensorBoard'
 )
 parser.add_argument(
-    '--savefreq', default=20, type=int,
+    '--savefreq', default=10, type=int,
     help='how many epochs per saved recon image'
 )
 
