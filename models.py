@@ -9,10 +9,8 @@ from fastmri.models.unet import Unet
 from fastmri.models.varnet import *
 
 
-
-
 """
-=========== STL_VARNET ============
+=========== VARNET_BLOCK ============
 """
 
 # We can make one iteration block like this
@@ -58,13 +56,15 @@ class VarNetBlock(nn.Module):
         )
 
         return current_kspace - soft_dc - model_term
-    
-    
+
+
+
+"""
+=========== STL_VARNET ============
+"""
 
     
 # now we can stack VarNetBlocks to make a unrolled VarNet (with 10 blocks)
-
-
 class STLVarNet(nn.Module):
     """
     A full variational network model.
@@ -110,52 +110,6 @@ class STLVarNet(nn.Module):
 =========== MTL_VarNet ============
 """
 
-# We can make one iteration block like this
-class VarNetBlock(nn.Module):
-    """
-    This model applies a combination of soft data consistency with the input
-    model as a regularizer. A series of these blocks can be stacked to form
-    the full variational network.
-    """
-
-    def __init__(self, model: nn.Module):
-        """
-        Args:
-            model: Module for "regularization" component of variational
-                network.
-        """
-        super().__init__()
-
-        self.model = model
-        self.eta = nn.Parameter(torch.ones(1))
-
-    def sens_expand(self, x: torch.Tensor, esp_maps: torch.Tensor) -> torch.Tensor:
-        return fastmri.fft2c(fastmri.complex_mul(x, esp_maps)) # F*S operator
-
-    def sens_reduce(self, x: torch.Tensor, esp_maps: torch.Tensor) -> torch.Tensor:
-        x = fastmri.ifft2c(x)
-        return fastmri.complex_mul(x, fastmri.complex_conj(esp_maps)).sum(
-            dim=1, keepdim=True
-        ) # S^H * F^H operator
-
-    def forward(
-        self,
-        current_kspace: torch.Tensor,
-        ref_kspace: torch.Tensor,
-        mask: torch.Tensor,
-        esp_maps: torch.Tensor,
-    ) -> torch.Tensor:
-        mask = mask.bool()
-        zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
-        soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.eta
-        model_term = self.sens_expand(
-            self.model(self.sens_reduce(current_kspace, esp_maps)), esp_maps
-        )
-
-        return current_kspace - soft_dc - model_term
-    
-   
-
 
 class MTLVarNet(nn.Module):
     """
@@ -189,6 +143,9 @@ class MTLVarNet(nn.Module):
             [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
         )
 
+        # uncert
+        self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
+
         
     def forward(
         self,
@@ -202,7 +159,9 @@ class MTLVarNet(nn.Module):
 
         for cascade in self.trunk:
             kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
-            
+
+
+        ### change here for different runs    
         if contrast == 'div_coronal_pd_fs':
             for cascade in self.pred_contrast1:
                 kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
@@ -216,4 +175,4 @@ class MTLVarNet(nn.Module):
             dim=1, keepdim=True
         )
         
-        return kspace_pred, im_comb
+        return kspace_pred, im_comb, self.logsigma

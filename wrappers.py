@@ -1,6 +1,9 @@
 import os
+import copy
 import numpy as np
 import torch
+
+from fastmri.data import transforms
 
 from utils import criterion, metrics
 from utils import plot_quadrant, write_tensorboard
@@ -47,7 +50,10 @@ def single_task_trainer(
             esp, im_fs = esp.to(device), im_fs.to(device)
 
             optimizer.zero_grad()
+
             _, im_us = single_task_model(kspace, mask, esp) # forward pass
+            # crop so im_us has same size as im_fs
+            im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
             loss = criterion(im_fs, im_us)
             loss.backward()
             optimizer.step()
@@ -74,6 +80,8 @@ def single_task_trainer(
                 esp, im_fs = esp.to(device), im_fs.to(device)
 
                 _, im_us = single_task_model(kspace, mask, esp) # forward pass
+                # crop so im_us has same size as im_fs
+                im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
                 loss = criterion(im_fs, im_us)
 
                 # losses and metrics are averaged over epoch at the end
@@ -88,8 +96,8 @@ def single_task_trainer(
                 if opt.tensorboard and epoch % opt.savefreq == 0: ###opt###
                     # if single contrast, only visualize 17th slice
                     if (
-                        val_idx == 17 or
-                        val_idx == val_batch - 17 and contrast_count > 1
+                        val_idx == 17 and contrast == opt.bothdatasets[0] or
+                        val_idx == val_batch - 17 and contrast == opt.bothdatasets[1]
                     ):
                         writer.add_figure(
                             f'{ratio}/{contrast}',
@@ -167,21 +175,43 @@ def multi_task_trainer(
     optimizer, scheduler,
     opt
 ):
+    # naming
+    ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
+
     # convenience
+    contrast_count = len(opt.datasets)
     train_batch = len(train_loader)
     val_batch = len(val_loader)
 
     # naive weighting
     weights = _get_naive_weights(train_ratios)
 
-    # naming
-    ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
-
     # for saving best validation model
     best_val_loss = np.infty
 
+
     for epoch in range(opt.epochs):
-        # contains info for single epoch
+
+        if opt.weighting == 'dwa':
+            # contains info for last two epochs; must be ex'd in this order
+            if epoch > 1:
+                cost_prevprev = copy.deepcopy(cost_prev)
+            if epoch > 0:
+                cost_prev = copy.deepcopy(cost)
+
+            # get dwa weights
+            if epoch > 1:
+                w_0 = cost_prev[opt.datasets[0]][0] / cost_prevprev[opt.datasets[0]][0]
+                w_1 = cost_prev[opt.datasets[1]][0] / cost_prevprev[opt.datasets[1]][0]
+
+                weights[opt.datasets[0]] = contrast_count * np.exp(w_0 / opt.temp) / (
+                    np.exp(w_0 / opt.temp) + np.exp(w_1 / opt.temp)
+                    )
+                weights[opt.datasets[1]] = contrast_count * np.exp(w_1 / opt.temp) / (
+                    np.exp(w_0 / opt.temp) + np.exp(w_1 / opt.temp)
+                    )              
+
+        # contains info for current epoch:
         cost = {
             contrast : np.zeros(8)
             for contrast in opt.datasets
@@ -199,12 +229,23 @@ def multi_task_trainer(
             esp, im_fs = esp.to(device), im_fs.to(device)
 
             optimizer.zero_grad()
-            _, im_us = multi_task_model(kspace, mask, esp, contrast) # forward pass
-            loss = weights[contrast] * criterion(im_fs, im_us)
-            loss.backward()
-            
+            _, im_us, logsigma = multi_task_model(kspace, mask, esp, contrast) # forward pass
+            # crop so im_us has same size as im_fs
+            im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
 
-            
+            # loss
+            if opt.weighting == 'naive' or opt.weighting == 'dwa':
+                loss = weights[contrast] * criterion(im_fs, im_us)
+
+            elif opt.weighting == 'uncert':
+                idx_contrast = opt.datasets.index(contrast)
+                loss = 1 / (2 * torch.exp(logsigma[idx_contrast])) * \
+                    criterion(im_fs, im_us) + \
+                        logsigma[idx_contrast] / 2
+                # for plotting purposes
+                weights[contrast] = logsigma[idx_contrast]
+
+            loss.backward()        
             optimizer.step()
 
             # losses and metrics are averaged over epoch at the end
@@ -213,12 +254,6 @@ def multi_task_trainer(
             # ssim, psnr, nrmse
             for j in range(3):
                 cost[contrast][j + 1] += metrics(im_fs, im_us)[j]
-
-            # # if not using naive weights, change weights here
-            # if opt.weighting == 'uncert':
-            #     continue
-            # elif opt.weighting == 'dwa':
-            #     continue
 
 
         # validation
@@ -233,7 +268,9 @@ def multi_task_trainer(
                 kspace, mask = kspace.to(device), mask.to(device)
                 esp, im_fs = esp.to(device), im_fs.to(device)
 
-                _, im_us = multi_task_model(kspace, mask, esp, contrast) # forward pass
+                _, im_us, logsigma = multi_task_model(kspace, mask, esp, contrast) # forward pass
+                # crop so im_us has same size as im_fs
+                im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
                 loss = criterion(im_fs, im_us)
 
                 # losses and metrics are averaged over epoch at the end

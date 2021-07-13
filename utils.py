@@ -27,13 +27,11 @@ def criterion(im_fs: torch.Tensor, im_us: torch.Tensor):
     @parameter im_us: undersampled image (2D)
     @parameter im_fs: fully sampled image (2D)
     should be on GPU device for fast computation
-    '''
-    
+    '''  
     # use l1 loss between two images
     criterion = nn.L1Loss()
     
     # can add more fancy loss functions here later
-    
     return criterion(im_us, im_fs)
 
 def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):

@@ -29,7 +29,7 @@ class MRIDataset(Dataset):
         self.slices = []
         for idx, root in enumerate(roots):
             contrast = root.split('/')[-2]
-            Files = list(pathlib.Path(root).glob('*.h5'))
+            Files = sorted(list(pathlib.Path(root).glob('*.h5')))
             
             # subsample files
             Files = self.subset_sample(Files, scarcities[idx])
@@ -46,6 +46,9 @@ class MRIDataset(Dataset):
 
             self.ratios[contrast] = file_count
             
+        center_fractions, accelerations = self.combine_cenfrac_acc(
+            center_fractions, accelerations,
+            )    
         self.mask_func = subsample.EquispacedMaskFunc(
             center_fractions=center_fractions, accelerations=accelerations
         )
@@ -56,9 +59,25 @@ class MRIDataset(Dataset):
         '''
         for _ in range(scarcity):
             if int(len(Files) / 2) > 0:
-                Files = self.rng.choice(Files, int(
-                    len(Files) / 2), replace=False)
+                Files = self.rng.choice(
+                    Files, 
+                    int(len(Files) / 2), 
+                    replace=False
+                )
         return list(Files)
+
+    def combine_cenfrac_acc(self, cen_fracs, accs):
+        '''
+        [c_1, c_2] [a_1, a_2]
+        becomes
+        [c_1, c_2, c_1, c_2] [a_1, a_1, a_2, a_2]
+        to match for EquispacedMaskFunc
+        '''
+        accs_final = []
+        for acc in accs:
+            accs_final += [acc] * len(cen_fracs)
+        cen_fracs_final = cen_fracs * len(accs)
+        return cen_fracs_final, accs_final
 
     def __len__(self):
         return len(self.examples)
@@ -85,16 +104,19 @@ class MRIDataset(Dataset):
         im_true = np.expand_dims(im_true, axis=0)
         im_true = transforms.to_tensor(im_true)
 
+        # crop to center to get rid of coil artifacts from sensitivity maps
+        im_true = transforms.complex_center_crop(im_true, (360, 320))
+
         return masked_kspace, mask.byte(), esp_maps, im_true, contrast
 
 
 def genDataLoader(
     roots, scarcities,
-    center_fractions = [0.06, 0.06, 0.06], accelerations = [6, 6, 6],
-    seed=123, shuffle=True
+    center_fractions, accelerations,
+     shuffle, num_workers, seed=333,
 ):
     dset = MRIDataset(
-        roots=roots, scarcities=scarcities, seed=seed,
-        center_fractions = [0.06, 0.06, 0.06], accelerations = [6, 6, 6]
-    )
-    return (DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=16), dset.ratios, dset.slices)
+        roots = roots, scarcities = scarcities, seed = seed, 
+        center_fractions = center_fractions, accelerations = accelerations,
+        )
+    return (DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=num_workers), dset.ratios, dset.slices)

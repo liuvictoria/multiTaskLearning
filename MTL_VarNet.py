@@ -43,6 +43,10 @@ parser.add_argument(
     help='number of unrolled blocks in total for one forward pass'
 )
 parser.add_argument(
+    '--temp', default=2.0, type=float, 
+    help='temperature for DWA (must be positive)'
+)
+parser.add_argument(
     '--network', default='varnet',
     help='type of network ie unet or varnet'
 )
@@ -62,23 +66,33 @@ parser.add_argument(
     '--datadir', default='/mnt/dense/vliu/summer_dset/',
     help='data root directory; where are datasets contained'
 )
+
 parser.add_argument(
     '--datasets', nargs='+',
     help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
     required = True
 )
+
 parser.add_argument(
     '--scarcities', default=[0, 1, 2, 3], type=int, nargs='+',
     help='number of samples in second contrast will be decreased by 1/2^N; i.e. 0 1 2'
     )
+
 parser.add_argument(
-    '--accelerations', default=[6], type=int, nargs='+',
-    help='list of undersampling factor of k-space; match with centerfracs'
+    '--accelerations', default=[5, 6, 7], type=int, nargs='+',
+    help='list of undersampling factor of k-space for training; validation is average acceleration '
     )
+
 parser.add_argument(
-    '--centerfracs', default=[0.06], type=int, nargs='+',
-    help='list of center fractions sampled of k-space; match with accelerations'
+    '--centerfracs', default=[0.05, 0.06, 0.07], type=int, nargs='+',
+    help='list of center fractions sampled of k-space for training; val is average centerfracs'
     )
+    
+parser.add_argument(
+    '--numworkers', default=16, type=int,
+    help='number of workers for PyTorch dataloader'
+)
+
 
 
 
@@ -187,6 +201,9 @@ class VarNet(nn.Module):
             [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
         )
 
+        # uncert
+        self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
+
         
     def forward(
         self,
@@ -214,8 +231,7 @@ class VarNet(nn.Module):
             dim=1, keepdim=True
         )
         
-        return kspace_pred, im_comb
-
+        return kspace_pred, im_comb, self.logsigma
     
 
 """
@@ -240,14 +256,16 @@ def main(opt):
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = True,
+            num_workers= opt.numworkers,
         )
 
         val_dloader = genDataLoader(
             [f'{basedir}/Val' for basedir in basedirs],
             [0, 0], # no downsampling
-            center_fractions = opt.centerfracs,
-            accelerations = opt.accelerations,
+            center_fractions = [np.mean(opt.centerfracs)],
+            accelerations = [int(np.mean(opt.accelerations))],
             shuffle = False, # no shuffling to allow visualization
+            num_workers= opt.numworkers,
         )
         print('generated dataloaders')
 

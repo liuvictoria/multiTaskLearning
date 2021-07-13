@@ -32,6 +32,11 @@ parser.add_argument(
     required = True
 )
 
+parser.add_argument(
+    '--numblocks', default=12, type=int,
+    help='number of unrolled blocks in total for one forward pass'
+)
+
 
 parser.add_argument(
     '--device', default='cuda:2',
@@ -56,6 +61,21 @@ parser.add_argument(
         i.e. div_coronal_pd_fs div_coronal_pd; 
         input the downsampled dataset first''',
     required = True
+)
+
+parser.add_argument(
+    '--accelerations', default=[5, 6, 7], type=int, nargs='+',
+    help='list of undersampling factor of k-space for training; validation is average acceleration '
+    )
+
+parser.add_argument(
+    '--centerfracs', default=[0.05, 0.06, 0.07], type=int, nargs='+',
+    help='list of center fractions sampled of k-space for training; val is average centerfracs'
+    )
+
+parser.add_argument(
+    '--numworkers', default=16, type=int,
+    help='number of workers for PyTorch dataloader'
 )
 
 
@@ -167,7 +187,7 @@ def df_single_contrast_all_models(
             
             #test_dloader[2] contains number of slices per mri
             for idx_mri, nsl in enumerate(test_dloader[2]): 
-                for idx_slice in range(nsl):         ### nsl
+                for idx_slice in range(nsl):
                     kspace, mask, esp_maps, im_fs, contrast = next(test_dataset)
                     contrast = contrast[0]
                     kspace, mask = kspace.to(opt.device), mask.to(opt.device)
@@ -217,8 +237,11 @@ def save_bokeh_plots(writer):
         # test loader for this one contrast
         test_dloader = genDataLoader(
             [f'{basedir}/Test'],
-            [4, 4], ####
+            [0, 0],
+            center_fractions = [np.mean(opt.centerfracs)],
+            accelerations = [int(np.mean(opt.accelerations))],
             shuffle = False,
+            num_workers = opt.numworkers,
         )
 
         # iterate through each model folder
@@ -239,10 +262,15 @@ def save_bokeh_plots(writer):
             # figure out which model skeleton to use
             if 'STL' in experimentname:
                 with torch.no_grad():
-                    the_model = STLVarNet().to(opt.device)
+                    the_model = STLVarNet(
+                        num_cascades = opt.numblocks,
+                        ).to(opt.device)
             elif 'MTL' in experimentname:
                 with torch.no_grad():
-                    the_model = MTLVarNet().to(opt.device)
+                    the_model = MTLVarNet(
+                        num_cascades = opt.numblocks,
+                        shared_blocks = opt.trunkblocks,
+                        ).to(opt.device)
 
             # get df for all ratios of a particular model, for a single contrast
             df = df_single_contrast_all_models(

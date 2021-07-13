@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 import fastmri
-from fastmri.data import transforms
 from fastmri.models.unet import Unet
 from fastmri.models.varnet import *
 
@@ -65,18 +64,38 @@ parser.add_argument(
     help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
     required = True
 )
+
+parser.add_argument(
+    '--bothdatasets', default = [
+        'div_coronal_pd_fs', 'div_coronal_pd',
+        ], 
+    nargs='+',
+    help='''names of both datasets i.e. div_coronal_pd_fs div_coronal_pd;
+    different from opt.datasets if opt.datasets only has one dataset;
+    used to determine tensorboard MR images;
+    this is annoying but allows for MR image to match across runs
+    input the downsampled dataset first'''
+)
+
 parser.add_argument(
     '--scarcities', default=[0, 1, 2, 3], type=int, nargs='+',
     help='number of samples in second contrast will be decreased by 1/2^N; i.e. 0 1 2'
     )
+
 parser.add_argument(
-    '--accelerations', default=[6], type=int, nargs='+',
-    help='list of undersampling factor of k-space; match with centerfracs'
+    '--accelerations', default=[5, 6, 7], type=int, nargs='+',
+    help='list of undersampling factor of k-space for training; validation is average acceleration '
     )
+    
 parser.add_argument(
-    '--centerfracs', default=[0.06], type=int, nargs='+',
-    help='list of center fractions sampled of k-space; match with accelerations'
+    '--centerfracs', default=[0.05, 0.06, 0.07], type=int, nargs='+',
+    help='list of center fractions sampled of k-space for training; val is average centerfracs'
     )
+
+parser.add_argument(
+    '--numworkers', default=16, type=int,
+    help='number of workers for PyTorch dataloader'
+)
 
 
 
@@ -219,14 +238,16 @@ def main(opt):
             center_fractions = opt.centerfracs,
             accelerations = opt.accelerations,
             shuffle = True,
+            num_workers= opt.numworkers,
         )
 
         val_dloader = genDataLoader(
-            [f'{basedir}/Val' for basedir in basedirs], # choose randomly
+            [f'{basedir}/Val' for basedir in basedirs],
             [0, 0], # no downsampling
-            center_fractions = opt.centerfracs,
-            accelerations = opt.accelerations,
+            center_fractions = [np.mean(opt.centerfracs)],
+            accelerations = [int(np.mean(opt.accelerations))],
             shuffle = False, # no shuffling to allow visualization
+            num_workers= opt.numworkers,
         )
         print('generated dataloaders')
 
