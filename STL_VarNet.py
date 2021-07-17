@@ -54,9 +54,10 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--mixeddata', default=True, type=bool,
+    '--mixeddata', default=1, type=int,
     help='''If true, the model trained on mixed data;
-        almost always true except for STL trained on single contrast'''
+        almost always true except for STL trained on single contrast;
+        0 for False; 1 for True'''
 )
 
 parser.add_argument(
@@ -105,12 +106,11 @@ parser.add_argument(
     help='experiment name i.e. STL or MTAN_pareto etc.'
 )
 parser.add_argument(
-    '--verbose', default=True, type=bool,
-    help='''if true, prints to console and creatues full TensorBoard
-    (if tensorboard is also True)'''
+    '--verbose', default=1, type=int,
+    help='''if true, prints to console average costs / metrics'''
 )
 parser.add_argument(
-    '--tensorboard', default=True, type=bool,
+    '--tensorboard', default=1, type=int,
     help='if true, creates TensorBoard'
 )
 parser.add_argument(

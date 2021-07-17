@@ -20,7 +20,7 @@ from utils import plot_quadrant
 
 # add to this every time new model is trained
 from models import STLVarNet
-from models import MTLVarNet
+from models import MTLVarNet_naive
         
 # command line argument parser
 parser = argparse.ArgumentParser(

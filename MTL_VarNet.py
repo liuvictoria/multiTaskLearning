@@ -102,12 +102,11 @@ parser.add_argument(
     help='experiment name i.e. STL or MTAN_pareto etc.'
 )
 parser.add_argument(
-    '--verbose', default=True, type=bool,
-    help='''if true, prints to console and creatues full TensorBoard
-    (if tensorboard is also True)'''
+    '--verbose', default=1, type=int,
+    help='''if true, prints to console average loss / metrics'''
 )
 parser.add_argument(
-    '--tensorboard', default=True, type=bool,
+    '--tensorboard', default=1, type=int,
     help='if true, creates TensorBoard'
 )
 parser.add_argument(
