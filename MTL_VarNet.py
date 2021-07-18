@@ -16,7 +16,15 @@ from dloader import genDataLoader
 from wrappers import multi_task_trainer
 
 
-# command line argument parser
+"""
+=========== Model ============
+"""
+from models import MTL_VarNet
+
+
+"""
+=========== command line parser ============
+"""
 parser = argparse.ArgumentParser(
     description = 'define parameters and roots for STL training'
 )
@@ -35,7 +43,11 @@ parser.add_argument(
 
 # model training
 parser.add_argument(
-    '--trunkblocks', default=10, type=int,
+    '--beginblocks', default=0, type=int,
+    help='number of unrolled, split blocks before trunk starts'
+)
+parser.add_argument(
+    '--sharedblocks', default=6, type=int,
     help='number of unrolled blocks in trunk'
 )
 parser.add_argument(
@@ -117,128 +129,15 @@ parser.add_argument(
 opt = parser.parse_args()
 
 
-"""
-=========== Model ============
-"""
-
-# We can make one iteration block like this
-class VarNetBlock(nn.Module):
-    """
-    This model applies a combination of soft data consistency with the input
-    model as a regularizer. A series of these blocks can be stacked to form
-    the full variational network.
-    """
-
-    def __init__(self, model: nn.Module):
-        """
-        Args:
-            model: Module for "regularization" component of variational
-                network.
-        """
-        super().__init__()
-
-        self.model = model
-        self.eta = nn.Parameter(torch.ones(1))
-
-    def sens_expand(self, x: torch.Tensor, esp_maps: torch.Tensor) -> torch.Tensor:
-        return fastmri.fft2c(fastmri.complex_mul(x, esp_maps)) # F*S operator
-
-    def sens_reduce(self, x: torch.Tensor, esp_maps: torch.Tensor) -> torch.Tensor:
-        x = fastmri.ifft2c(x)
-        return fastmri.complex_mul(x, fastmri.complex_conj(esp_maps)).sum(
-            dim=1, keepdim=True
-        ) # S^H * F^H operator
-
-    def forward(
-        self,
-        current_kspace: torch.Tensor,
-        ref_kspace: torch.Tensor,
-        mask: torch.Tensor,
-        esp_maps: torch.Tensor,
-    ) -> torch.Tensor:
-        mask = mask.bool()
-        zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
-        soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.eta
-        model_term = self.sens_expand(
-            self.model(self.sens_reduce(current_kspace, esp_maps)), esp_maps
-        )
-
-        return current_kspace - soft_dc - model_term
-    
-   
 
 
-class VarNet(nn.Module):
-    """
-    A full variational network model.
-
-    This model applies a combination of soft data consistency with a U-Net
-    regularizer. To use non-U-Net regularizers, use VarNetBock.
-    """
-
-    def __init__(
-        self,
-        num_cascades: int = opt.numblocks,
-        shared_blocks: int = opt.trunkblocks,
-        chans: int = 18,
-        pools: int = 4,
-    ):
-        super().__init__()
-
-        task_blocks = num_cascades - shared_blocks
-        
-        # define shared trunk
-        self.trunk = nn.ModuleList(
-            [VarNetBlock(NormUnet(chans, pools)) for _ in range(shared_blocks)]
-        )
-        
-        # define task specific layers
-        self.pred_contrast1 = nn.ModuleList(
-            [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
-        )
-        self.pred_contrast2 = nn.ModuleList(
-            [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
-        )
-
-        # uncert
-        self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
-
-        
-    def forward(
-        self,
-        masked_kspace: torch.Tensor, 
-        mask: torch.Tensor,
-        esp_maps: torch.Tensor,
-        contrast: str,
-    ) -> torch.Tensor:
-        
-        kspace_pred = masked_kspace.clone()
-
-        for cascade in self.trunk:
-            kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
-            
-        if contrast == opt.datasets[0]:
-            for cascade in self.pred_contrast1:
-                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
-                
-        elif contrast == opt.datasets[1]:
-            for cascade in self.pred_contrast2:
-                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
-        
-        im_coil = fastmri.ifft2c(kspace_pred)
-        im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(
-            dim=1, keepdim=True
-        )
-        
-        return kspace_pred, im_comb, self.logsigma
-    
 
 """
 =========== Runs ============
 """    
 
 # datasets
-run_name = f"runs/{opt.experimentname}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}/"
+run_name = f"runs/{opt.experimentname}_{opt.network}{opt.beginblocks}:{opt.sharedblocks}_{'_'.join(opt.datasets)}/"
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
@@ -268,9 +167,14 @@ def main(opt):
         )
         print('generated dataloaders')
 
-        # other inputs to STL wrapper
+        # other inputs to MTL wrapper
         device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
-        varnet = VarNet().to(device)
+        varnet = MTL_VarNet(
+            opt.datasets,
+            num_cascades = opt.numblocks,
+            begin_blocks = opt.beginblocks, 
+            shared_blocks = opt.sharedblocks
+            ).to(device)
 
         optimizer = torch.optim.Adam(varnet.parameters(),lr = opt.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)

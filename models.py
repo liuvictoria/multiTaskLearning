@@ -65,7 +65,7 @@ class VarNetBlock(nn.Module):
 
     
 # now we can stack VarNetBlocks to make a unrolled VarNet (with 10 blocks)
-class STLVarNet(nn.Module):
+class STL_VarNet(nn.Module):
     """
     A full variational network model.
 
@@ -110,8 +110,7 @@ class STLVarNet(nn.Module):
 =========== MTL_VarNet ============
 """
 
-
-class MTLVarNet(nn.Module):
+class MTL_VarNet(nn.Module):
     """
     A full variational network model.
 
@@ -121,21 +120,34 @@ class MTLVarNet(nn.Module):
 
     def __init__(
         self,
-        num_cascades: int = 12,
-        shared_blocks: int = 10,
+        datasets: list,
+        num_cascades: int,
+        begin_blocks: int,
+        shared_blocks: int,
         chans: int = 18,
         pools: int = 4,
+        
     ):
         super().__init__()
-
-        task_blocks = num_cascades - shared_blocks
+        if begin_blocks + shared_blocks > num_cascades:
+            raise ValueError(f'beginning and shared blocks are greater than the {num_cascades} allowed blocks')
         
+        task_blocks = num_cascades - shared_blocks - begin_blocks
+        
+        # define task specific begin layers
+        self.begin_contrast1 = nn.ModuleList(
+            [VarNetBlock(NormUnet(chans, pools)) for _ in range(begin_blocks)]
+        )
+        self.begin_contrast2 = nn.ModuleList(
+            [VarNetBlock(NormUnet(chans, pools)) for _ in range(begin_blocks)]
+        )
+
         # define shared trunk
         self.trunk = nn.ModuleList(
             [VarNetBlock(NormUnet(chans, pools)) for _ in range(shared_blocks)]
         )
         
-        # define task specific layers
+        # define task specific end layers
         self.pred_contrast1 = nn.ModuleList(
             [VarNetBlock(NormUnet(chans, pools)) for _ in range(task_blocks)]
         )
@@ -146,7 +158,9 @@ class MTLVarNet(nn.Module):
         # uncert
         self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
 
-        
+        # datasets
+        self.datasets = datasets
+
     def forward(
         self,
         masked_kspace: torch.Tensor, 
@@ -157,16 +171,25 @@ class MTLVarNet(nn.Module):
         
         kspace_pred = masked_kspace.clone()
 
+        # beginning, separate branches
+        if contrast == self.datasets[0]:
+            for cascade in self.begin_contrast1:
+                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
+                
+        elif contrast == self.datasets[1]:
+            for cascade in self.begin_contrast2:
+                kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
+
+        # merge into trunk
         for cascade in self.trunk:
             kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
-
-
-        ### change here for different runs    
-        if contrast == 'div_coronal_pd_fs':
+        
+        # split again
+        if contrast == self.datasets[0]:
             for cascade in self.pred_contrast1:
                 kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
                 
-        elif contrast == 'div_coronal_pd':
+        elif contrast == self.datasets[1]:
             for cascade in self.pred_contrast2:
                 kspace_pred = cascade(kspace_pred, masked_kspace, mask, esp_maps)
         

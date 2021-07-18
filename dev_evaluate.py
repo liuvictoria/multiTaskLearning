@@ -1,3 +1,7 @@
+'''
+evaluate models on test dataset
+every time new model is changed, add it to ### portions
+'''
 import os
 import argparse
 import glob
@@ -18,9 +22,9 @@ from fastmri.data import transforms
 from utils import criterion, metrics
 from utils import plot_quadrant
 
-# add to this every time new model is trained
-from models import STLVarNet
-from models import MTLVarNet_naive
+### add to this every time new model is trained ###
+from models import STL_VarNet
+from models import MTL_VarNet
         
 # command line argument parser
 parser = argparse.ArgumentParser(
@@ -35,16 +39,24 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--trunkblocks', type=int, nargs = '+',
-    help='''number of unrolled blocks in trunk; 
+    '--numblocks', type=int, nargs = '+',
+    help='''number of unrolled blocks in total for one forward pass;
+    match to each experimentnames''',
+    required = True,
+)
+
+parser.add_argument(
+    '--beginblocks', type=int, nargs = '+',
+    help='''number of unrolled blocks before shared trunk; 
     only for MTL; for STL, use 0; 
     match to each experimentnames''',
     required = True,
 )
 
 parser.add_argument(
-    '--numblocks', type=int, nargs = '+',
-    help='''number of unrolled blocks in total for one forward pass;
+    '--sharedblocks', type=int, nargs = '+',
+    help='''number of unrolled blocks in trunk; 
+    only for MTL; for STL, use 0; 
     match to each experimentnames''',
     required = True,
 )
@@ -95,9 +107,11 @@ parser.add_argument(
 
 # plot properties
 parser.add_argument(
-    '--colors', default = 'Set2_8',
+    '--colors', default = ['Set2_8'], nargs = '+',
     help='''Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8
-    https://docs.bokeh.org/en/latest/docs/reference/palettes.html#bokeh-palette'''
+    https://docs.bokeh.org/en/latest/docs/reference/palettes.html#bokeh-palette
+    OR
+    give a list of custom colors'''
 )
 
 parser.add_argument(
@@ -141,7 +155,8 @@ parser.add_argument(
 opt = parser.parse_args()
 
 # change opt.colors from string to variable of color palette
-exec("%s = %s" % ('opt.colors', opt.colors))
+if len(opt.colors) == 1:
+    exec("%s = %s" % ('opt.colors', opt.colors[0]))
 
         
 # preliminary plot initialization / colors
@@ -175,10 +190,8 @@ def _initialize_colormap():
         for i, dataset_exp in enumerate(_dataset_exps)
     }
     return colormap
-     
-    
-    
-    
+
+
 def df_single_contrast_all_models(
     the_model, test_dloader, model_filedir, contrast, idx_experimentname, writer
 ):
@@ -201,7 +214,7 @@ def df_single_contrast_all_models(
         
         for idx_model, model_filepath in enumerate(modelpaths):
             # model name
-            model = ':'.join(model_filepath.split('models/')[1][:-6].split('/'))
+            model = '~'.join(model_filepath.split('models/')[1][:-6].split('/'))
             # load model
             the_model.load_state_dict(torch.load(
                 model_filepath, map_location = opt.device,
@@ -245,22 +258,82 @@ def df_single_contrast_all_models(
                             f'{model}/{contrast}/MRI_{idx_mri}', 
                             plot_quadrant(im_fs, im_us),
                             global_step = idx_slice,
-                        )     
+                        )
             
             # define x axis
-            model = model.split(':')[1]
-            ratio_1 = int(model.split('_')[0].split('=')[1])
+            model = model.split('~') # 0 is STL_varnet_etc, 1 is N=_N=_etc
+            ratio_1 = int(model[1].split('_')[0].split('=')[1])
             df_row[idx_model, 4] = ratio_1
 
             if opt.mixeddata[idx_experimentname]:
-                ratio_2 = int(model.split('_')[1].split('=')[1])
+                ratio_2 = int(model[1].split('_')[1].split('=')[1])
                 df_row[idx_model, 5] = ratio_2
 
-        
+    # fraction instead of absolute no. slices
+    df_row[:, 4] /= np.max(df_row[:, 4])
+    if opt.mixeddata[idx_experimentname]:
+        df_row[:, 5] /= np.max(df_row[:, 5])
+
+    ### create csv file  
+      
     return pd.DataFrame(
         df_row,
         columns=columns
     )
+
+def _get_model_filedir(dataset, experimentname, idx_experimentname):
+    # normally, we are in mixeddata case
+    if opt.mixeddata[idx_experimentname]:
+        # MTL (experimental)
+        if opt.sharedblocks[idx_experimentname] != 0:
+            model_filedir = f"models/" + \
+                f"{experimentname[idx_experimentname]}_" + \
+                f"{opt.network[idx_experimentname]}" + \
+                f"{opt.beginblocks[idx_experimentname]}:{opt.sharedblocks[idx_experimentname]}_" +\
+                f"{'_'.join(opt.datasets)}"
+
+        # STL mixed (control)
+        else:
+            model_filedir = f"models/" + \
+                f"{experimentname}_" + \
+                f"{opt.network[idx_experimentname]}_" + \
+                f"{'_'.join(opt.datasets)}"
+
+    # only for STL where data are not mixed (control)
+    else:
+        model_filedir = f"models/" + \
+            f"{experimentname}_" + \
+            f"{opt.network[idx_experimentname]}_" + \
+            f"{dataset}"
+    
+    if not os.path.isdir(model_filedir):
+        raise ValueError(f'{model_filedir} is not valid dir')
+
+    return model_filedir
+
+def _load_model(dataset, experimentname, idx_experimentname):
+    ### figure out which model skeleton to use ###
+    if 'STL' in experimentname:
+        with torch.no_grad():
+            the_model = STL_VarNet(
+                num_cascades = opt.numblocks[idx_experimentname],
+                ).to(opt.device)
+                
+    elif 'MTL' in experimentname:
+        with torch.no_grad():
+            the_model = MTL_VarNet(
+                datasets = opt.datasets,
+                num_cascades = opt.numblocks[idx_experimentname],
+                begin_blocks = opt.begin_blocks,
+                shared_blocks = opt.sharedblocks[idx_experimentname],
+                ).to(opt.device)
+    
+    else:
+        raise ValueError(f'{experimentname} not valid')
+    
+    # figure out where to load saved weights from
+    model_filedir = _get_model_filedir(dataset, experimentname, idx_experimentname)
+    return the_model, model_filedir
 
 
 def save_bokeh_plots(writer):
@@ -282,54 +355,14 @@ def save_bokeh_plots(writer):
             num_workers = opt.numworkers,
         )
 
-        # iterate through each model folder
+        # iterate through each model (i.e. N = _) in the folder
         for idx_experimentname, experimentname in enumerate(opt.experimentnames):
-            print(f'working on {dataset}, {experimentname}')
-            # figure out which model skeleton to use
-            if 'STL' in experimentname:
-                with torch.no_grad():
-                    the_model = STLVarNet(
-                        num_cascades = opt.numblocks[idx_experimentname],
-                        ).to(opt.device)
-                        
-            elif 'MTL' in experimentname:
-                with torch.no_grad():
-                    the_model = MTLVarNet(
-                        num_cascades = opt.numblocks[idx_experimentname],
-                        shared_blocks = opt.trunkblocks[idx_experimentname],
-                        ).to(opt.device)
-            
-            else:
-                raise ValueError(f'{experimentname} not valid')
-            
-            # figure out where to load saved weights from
-            # normally, we are in mixeddata case
-            if opt.mixeddata[idx_experimentname]:
-                # MTL (experimental)
-                if opt.trunkblocks[idx_experimentname] != 0:
-                    model_filedir = f"models/" + \
-                        f"{experimentname[idx_experimentname]}_" + \
-                        f"{opt.network[idx_experimentname]}{opt.trunkblocks[idx_experimentname]}_" +\
-                        f"{'_'.join(opt.datasets)}"
+            print(f'working on {dataset}, {experimentname}') 
 
-                # STL mixed (control)
-                else:
-                    model_filedir = f"models/" + \
-                        f"{experimentname}_" + \
-                        f"{opt.network[idx_experimentname]}_" + \
-                        f"{'_'.join(opt.datasets)}"
-
-            # only for STL where data are not mixed (control)
-            else:
-                model_filedir = f"models/" + \
-                    f"{experimentname}_" + \
-                    f"{opt.network[idx_experimentname]}_" + \
-                    f"{dataset}"
-            
-            if not os.path.isdir(model_filedir):
-                raise ValueError(f'{model_filedir} is not valid dir')
- 
-
+            # load model
+            the_model, model_filedir = _load_model(
+                dataset, experimentname, idx_experimentname
+                )
 
             # get df for all ratios of a particular model, for a single contrast
             df = df_single_contrast_all_models(
