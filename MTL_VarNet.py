@@ -100,7 +100,21 @@ parser.add_argument(
     '--centerfracs', default=[0.05, 0.06, 0.07], type=int, nargs='+',
     help='list of center fractions sampled of k-space for training; val is average centerfracs'
     )
-    
+
+# data loader properties
+parser.add_argument(
+    '--stratified', default=0, type=int,
+    help='''if true, stratifies the dataloader'''
+)
+
+parser.add_argument(
+    '--stratifymethod', default='upsample',
+    help='''
+    one of [upsample, downsample] for
+    scarce, abundant dataset, respectively
+    does not matter if --stratified is false'''
+)
+
 parser.add_argument(
     '--numworkers', default=16, type=int,
     help='number of workers for PyTorch dataloader'
@@ -156,6 +170,7 @@ def main(opt):
             accelerations = opt.accelerations,
             shuffle = True,
             num_workers= opt.numworkers,
+            stratified = opt.stratified, balancing = opt.stratifymethod
         )
 
         val_dloader = genDataLoader(

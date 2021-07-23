@@ -6,7 +6,7 @@ import pathlib  # pathlib is a good library for reading files in a nested folder
 
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data import Sampler
-from typing import List
+
 import torch
 
 import fastmri  # We will also use fastmri library
@@ -35,7 +35,7 @@ class MRIDataset(Dataset):
         for idx, root in enumerate(roots):
             contrast = root.split('/')[-2]
             Files = sorted(list(pathlib.Path(root).glob('*.h5')))
-            
+
             # subsample files
             Files = self.subset_sample(Files, scarcities[idx])
             # track file count for ratios
@@ -143,13 +143,13 @@ class BalancedSampler(Sampler):
     def __init__(
         self, 
         labels: np.ndarray, 
-        mode: str = 'upsampling'
+        method: str = 'upsample'
         ):
         """
         Args:
             labels (np.ndarray): ndarray of class label
                 for each elem in the dataset
-            mode (str): Strategy to balance classes.
+            method (str): Strategy to balance classes.
                 Must be one of [downsample, upsample]
         """
         super().__init__(labels)
@@ -163,9 +163,9 @@ class BalancedSampler(Sampler):
             for label in np.unique(labels)
         }
 
-        assert mode in ['downsample', 'upsample']
+        assert method in ['downsample', 'upsample']
 
-        if mode == 'downsample':
+        if method == 'downsample':
             samples_per_class = min(samples_per_class.values())
         else:
             samples_per_class = max(samples_per_class.values())
@@ -187,19 +187,20 @@ class BalancedSampler(Sampler):
             )
 
         for key in sorted(self.lbl2idx):
-            # for large index, repeat_times = 1
+            # for abundant dataset, repeat_times = 1
             repeat_times = np.ceil(
-                self.samples_per_class // len(self.lbl2idx[key]
-                )
+                self.samples_per_class // len(self.lbl2idx[key])
+            )
+
             indices_repeated = np.tile(
                 self.lbl2idx[key],
                 repeat_times,
             )
 
             indices[key]= np.random.choice(
-                repeated_indices, self.samples_per_class, replace = False,
+                indices_repeated, self.samples_per_class, replace = False,
             )
-        # currently shape includes number of unique labels
+        # currently shape of indices has number of unique labels, so flatten that
         indices = indices.flatten()
         np.random.shuffle(indices)
 
@@ -217,8 +218,8 @@ class BalancedSampler(Sampler):
 def genDataLoader(
     roots, scarcities,
     center_fractions, accelerations,
-    shuffle, num_workers, seed=333,
-    stratified = False, balancing = 'downsample'
+    shuffle, num_workers, seed=123,
+    stratified = False, method = 'downsample'
 ):
     dset = MRIDataset(
         roots = roots, scarcities = scarcities, seed = seed, 
@@ -226,17 +227,18 @@ def genDataLoader(
         )
     # only for beginning of training
     if stratified:
-        balancedSampler = BalancedSampler(
-            labels = dset.contrast_labels()
+        sampler = BalancedSampler(
+            labels = dset.contrast_labels(),
+            method = method,
         )
         return (
             DataLoader(
                 dset, batch_size = 1, 
-                sampler = balancedSampler
+                sampler = sampler,
                 shuffle = False, num_workers = num_workers
             ),
             {
-                contrast : balancedSampler.samples_per_class
+                contrast : sampler.samples_per_class
                 for contrast in dset.ratios.keys()
             }
         )
