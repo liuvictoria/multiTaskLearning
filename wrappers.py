@@ -306,7 +306,7 @@ def multi_task_trainer(
         # early stopping
         if cost['overall'][4] < best_val_loss:
             best_val_loss = cost['overall'][4]
-            filedir = f"models/{opt.experimentname}_{opt.network}{opt.trunkblocks}_{'_'.join(opt.datasets)}"
+            filedir = f"models/{opt.experimentname}_{opt.network}{opt.sharedblocks}_{'_'.join(opt.datasets)}"
             if not os.path.isdir(filedir):
                 os.makedirs(filedir)
             torch.save(

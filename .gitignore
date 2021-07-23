@@ -10,4 +10,7 @@ nohup.out
 /plots/
 runs_sens/
 /models/
-/development/prev runs
+/development/prev plots/
+*events.out.tfevents.*
+/development/
+*.html

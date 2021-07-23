@@ -40,8 +40,11 @@ parser.add_argument(
 )
 
 
-
 # model training
+parser.add_argument(
+    '--numblocks', default=12, type=int,
+    help='number of unrolled blocks in total for one forward pass'
+)
 parser.add_argument(
     '--beginblocks', default=0, type=int,
     help='number of unrolled, split blocks before trunk starts'
@@ -50,39 +53,37 @@ parser.add_argument(
     '--sharedblocks', default=6, type=int,
     help='number of unrolled blocks in trunk'
 )
+
 parser.add_argument(
-    '--numblocks', default=12, type=int,
-    help='number of unrolled blocks in total for one forward pass'
+    '--network', default='varnet',
+    help='type of network ie unet or varnet'
 )
+
 parser.add_argument(
     '--temp', default=2.0, type=float, 
     help='temperature for DWA (must be positive)'
 )
 parser.add_argument(
-    '--network', default='varnet',
-    help='type of network ie unet or varnet'
-)
-parser.add_argument(
     '--weighting', default='naive',
     help='naive, uncert, dwa, pareto'
 )
+
 parser.add_argument(
     '--device', default='cuda:2',
     help='cuda:2 device default'
 )
 
 
-
 # dataset properties
-parser.add_argument(
-    '--datadir', default='/mnt/dense/vliu/summer_dset/',
-    help='data root directory; where are datasets contained'
-)
-
 parser.add_argument(
     '--datasets', nargs='+',
     help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
-    required = True
+    required = True,
+)
+
+parser.add_argument(
+    '--datadir', default='/mnt/dense/vliu/summer_dset/',
+    help='data root directory; where are datasets contained'
 )
 
 parser.add_argument(

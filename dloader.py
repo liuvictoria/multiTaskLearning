@@ -5,6 +5,8 @@ import h5py
 import pathlib  # pathlib is a good library for reading files in a nested folders
 
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Sampler
+from typing import List
 import torch
 
 import fastmri  # We will also use fastmri library
@@ -24,8 +26,11 @@ class MRIDataset(Dataset):
         center_fractions, accelerations
     ):
         self.rng = np.random.default_rng(seed)
+        # where dataset references are stored
         self.examples = []
+        # ratios of each contrast
         self.ratios = {}
+        # for evaluation; plot MRI slices contiguously
         self.slices = []
         for idx, root in enumerate(roots):
             contrast = root.split('/')[-2]
@@ -52,6 +57,7 @@ class MRIDataset(Dataset):
         self.mask_func = subsample.EquispacedMaskFunc(
             center_fractions=center_fractions, accelerations=accelerations
         )
+    
 
     def subset_sample(self, Files, scarcity):
         '''
@@ -78,6 +84,21 @@ class MRIDataset(Dataset):
             accs_final += [acc] * len(cen_fracs)
         cen_fracs_final = cen_fracs * len(accs)
         return cen_fracs_final, accs_final
+
+    
+    def contrast_labels(self):
+        # will be populated as [0, 0, 0, 1, 1, 1, 1, 1, ...]
+        labels = np.empty(sum(self.ratios.values())).astype(int)
+
+        # self.ratios keys are in insertion order, python >= 3.7
+        start_idx = 0
+        for idx_contrast, contrast_count in enumerate(self.ratios.values()):
+            labels[start_idx : start_idx + contrast_count] = np.full(
+                contrast_count, idx_contrast
+                )
+            start_idx += contrast_count
+        return labels
+
 
     def __len__(self):
         return len(self.examples)
@@ -110,13 +131,122 @@ class MRIDataset(Dataset):
         return masked_kspace, mask.byte(), esp_maps, im_true, contrast
 
 
+# BalancedSampler code modified from kaggle #
+# https://www.kaggle.com/shonenkov/class-balance-with-pytorch-xla #
+
+class BalancedSampler(Sampler):
+    """
+    Abstraction over data sampler.
+    Allows you to create stratified sample on unbalanced classes.
+    """
+
+    def __init__(
+        self, 
+        labels: np.ndarray, 
+        mode: str = 'upsampling'
+        ):
+        """
+        Args:
+            labels (np.ndarray): ndarray of class label
+                for each elem in the dataset
+            mode (str): Strategy to balance classes.
+                Must be one of [downsample, upsample]
+        """
+        super().__init__(labels)
+
+        samples_per_class = {
+            label: (labels == label).sum() for label in np.unique(labels)
+        }
+
+        self.lbl2idx = {
+            label: np.arange(len(labels))[labels == label].tolist()
+            for label in np.unique(labels)
+        }
+
+        assert mode in ['downsample', 'upsample']
+
+        if mode == 'downsample':
+            samples_per_class = min(samples_per_class.values())
+        else:
+            samples_per_class = max(samples_per_class.values())
+
+        self.labels = labels
+        self.samples_per_class = samples_per_class
+        
+        # len of total slices used in the iteration; includes repeats
+        self.length = self.samples_per_class * len(np.unique(labels)) 
+
+    def __iter__(self) -> Iterator[int]:
+        """
+        Yields:
+            indices of stratified sample
+        """
+        indices = np.empty(
+            len(np.unique(self.labels)), 
+            self.samples_per_class
+            )
+
+        for key in sorted(self.lbl2idx):
+            # for large index, repeat_times = 1
+            repeat_times = np.ceil(
+                self.samples_per_class // len(self.lbl2idx[key]
+                )
+            indices_repeated = np.tile(
+                self.lbl2idx[key],
+                repeat_times,
+            )
+
+            indices[key]= np.random.choice(
+                repeated_indices, self.samples_per_class, replace = False,
+            )
+        # currently shape includes number of unique labels
+        indices = indices.flatten()
+        np.random.shuffle(indices)
+
+        return iter(indices)
+
+    def __len__(self) -> int:
+        """
+        Returns:
+             length of result sample
+        """
+        return self.length
+
+
+
 def genDataLoader(
     roots, scarcities,
     center_fractions, accelerations,
-     shuffle, num_workers, seed=333,
+    shuffle, num_workers, seed=333,
+    stratified = False, balancing = 'downsample'
 ):
     dset = MRIDataset(
         roots = roots, scarcities = scarcities, seed = seed, 
         center_fractions = center_fractions, accelerations = accelerations,
         )
-    return (DataLoader(dset, batch_size=1, shuffle=shuffle, num_workers=num_workers), dset.ratios, dset.slices)
+    # only for beginning of training
+    if stratified:
+        balancedSampler = BalancedSampler(
+            labels = dset.contrast_labels()
+        )
+        return (
+            DataLoader(
+                dset, batch_size = 1, 
+                sampler = balancedSampler
+                shuffle = False, num_workers = num_workers
+            ),
+            {
+                contrast : balancedSampler.samples_per_class
+                for contrast in dset.ratios.keys()
+            }
+        )
+    # if val or test, we will never have stratified.
+    else:
+        return (
+            DataLoader(
+                dset, batch_size=1, 
+                shuffle = shuffle, num_workers = num_workers
+                ), 
+            dset.ratios, 
+            dset.slices
+            )

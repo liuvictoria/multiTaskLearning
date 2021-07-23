@@ -183,7 +183,7 @@ def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
                 _param_dict_MTL( # use MTL param dict
                     opt.lr, opt.epochs, opt.numblocks, 
                     opt.accelerations, opt.centerfracs,
-                    opt.trunkblocks, opt.weighting
+                    opt.sharedblocks, opt.weighting
                 ), 
                 {'zdummy':0}
             )

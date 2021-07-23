@@ -30,7 +30,11 @@ class VarNetBlock(nn.Module):
         super().__init__()
 
         self.model = model
-        self.eta = nn.Parameter(torch.ones(1))
+        self.eta = nn.Parameter(torch.ones(1)) # shared across two contrasts; shouldn't be shared. even for shared layers, eta should be diff
+        # depends on noise level
+        # create a new VarNetBlock for MTL
+        # pretraining; train on abundant; then add heads for contrasts. Transfer learning?
+        
 
     def sens_expand(self, x: torch.Tensor, sens_maps: torch.Tensor) -> torch.Tensor:
         return fastmri.fft2c(fastmri.complex_mul(x, sens_maps)) # F*S operator
@@ -75,7 +79,7 @@ class STL_VarNet(nn.Module):
 
     def __init__(
         self,
-        num_cascades: int = 12,
+        num_cascades: int,
         chans: int = 18,
         pools: int = 4,
     ):
