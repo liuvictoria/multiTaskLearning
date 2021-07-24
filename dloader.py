@@ -6,6 +6,7 @@ import pathlib  # pathlib is a good library for reading files in a nested folder
 
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data import Sampler
+from typing import Iterator
 
 import torch
 
@@ -181,6 +182,7 @@ class BalancedSampler(Sampler):
         Yields:
             indices of stratified sample
         """
+        # holds correct number of randomized indices for each label
         indices = np.empty(
             len(np.unique(self.labels)), 
             self.samples_per_class
@@ -200,11 +202,17 @@ class BalancedSampler(Sampler):
             indices[key]= np.random.choice(
                 indices_repeated, self.samples_per_class, replace = False,
             )
-        # currently shape of indices has number of unique labels, so flatten that
-        indices = indices.flatten()
-        np.random.shuffle(indices)
 
-        return iter(indices)
+        # interleave the randomized indices of each label
+        interleaved = np.empty(
+            self.samples_per_class * len(np.uniques(self.labels)), 
+            dtype = int
+            )
+        for idx, label_indices in indices:
+            # every nth will be a slice from the same contrast (n contrasts total)
+            interleaved[idx::len(np.uniques(self.labels))] = label_indices
+
+        return iter(interleaved)
 
     def __len__(self) -> int:
         """

@@ -143,7 +143,7 @@ parser.add_argument(
 
 opt = parser.parse_args()
 
-
+print(opt)
 
 
 
@@ -170,7 +170,7 @@ def main(opt):
             accelerations = opt.accelerations,
             shuffle = True,
             num_workers= opt.numworkers,
-            stratified = opt.stratified, balancing = opt.stratifymethod
+            stratified = opt.stratified, method = opt.stratifymethod
         )
 
         val_dloader = genDataLoader(
