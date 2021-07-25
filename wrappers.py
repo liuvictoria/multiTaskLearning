@@ -152,12 +152,19 @@ def single_task_trainer(
         used by Universal MT Trainer
 """
 
-def _get_naive_weights(train_ratios):
+def _get_naive_weights(train_ratios, opt):
+    if opt.stratified:
+        return {
+            contrast : 1
+            for contrast in train_ratios.keys()
+        }
     total_slices = sum(train_ratios.values())
-    naive_weights = {}
-    for contrast in train_ratios.keys():
-        # balance weights; smaller datasets get larger weights
-        naive_weights[contrast] = len(train_ratios) * (total_slices - train_ratios[contrast]) / total_slices
+
+    # balance weights if not stratified; smaller datasets get larger weights
+    naive_weights = {
+        contrast : len(train_ratios) * (total_slices - train_ratios[contrast]) / total_slices
+        for contrast in train_ratios.keys()
+    }
     return naive_weights
 
 
@@ -175,7 +182,8 @@ def multi_task_trainer(
     optimizer, scheduler,
     opt
 ):
-    # naming
+    
+    # naming (even if stratified, scarce / abundant ratio is preserved)
     ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
 
     # convenience
@@ -183,8 +191,8 @@ def multi_task_trainer(
     train_batch = len(train_loader)
     val_batch = len(val_loader)
 
-    # naive weighting
-    weights = _get_naive_weights(train_ratios)
+    # naive weighting (accounts for stratified or not)
+    weights = _get_naive_weights(train_ratios, opt)
 
     # for saving best validation model
     best_val_loss = np.infty
@@ -298,7 +306,11 @@ def multi_task_trainer(
 
         # average out
         for contrast in opt.datasets:
-            cost[contrast][:4] /= train_ratios[contrast]
+            if opt.stratified:
+                # scarce / abundant have same effective sizes
+                cost[contrast][:4] /= train_batch / len(opt.datasets)
+            else:
+                cost[contrast][:4] /= train_ratios[contrast]
             cost[contrast][4:] /= val_ratios[contrast]
 
 

@@ -183,35 +183,34 @@ class BalancedSampler(Sampler):
             indices of stratified sample
         """
         # holds correct number of randomized indices for each label
-        indices = np.empty(
+        indices = np.empty((
             len(np.unique(self.labels)), 
             self.samples_per_class
-            )
+            ))
 
         for key in sorted(self.lbl2idx):
             # for abundant dataset, repeat_times = 1
-            repeat_times = np.ceil(
-                self.samples_per_class // len(self.lbl2idx[key])
-            )
+            repeat_times = int(np.ceil(
+                self.samples_per_class / len(self.lbl2idx[key])
+            ))
 
             indices_repeated = np.tile(
                 self.lbl2idx[key],
                 repeat_times,
             )
-
-            indices[key]= np.random.choice(
+        
+            indices[key][:] = np.random.choice(
                 indices_repeated, self.samples_per_class, replace = False,
             )
 
         # interleave the randomized indices of each label
         interleaved = np.empty(
-            self.samples_per_class * len(np.uniques(self.labels)), 
+            self.samples_per_class * len(np.unique(self.labels)), 
             dtype = int
             )
-        for idx, label_indices in indices:
+        for idx_start, label_indices in enumerate(indices):
             # every nth will be a slice from the same contrast (n contrasts total)
-            interleaved[idx::len(np.uniques(self.labels))] = label_indices
-
+            interleaved[idx_start::len(np.unique(self.labels))] = label_indices
         return iter(interleaved)
 
     def __len__(self) -> int:
@@ -229,6 +228,17 @@ def genDataLoader(
     shuffle, num_workers, seed=123,
     stratified = False, method = 'downsample'
 ):
+    '''
+    if shuffle = True, but stratified = True, 
+    then shuffle will be overriden w/ shuffle = False
+    so in general, this allows us to say shuffle = True
+    for all train dataloaders, even if by accident
+
+    the second returned element is always the ratio
+    between scarce / abundant without stratification.
+    Stratification counts are taken care of in wrappers.py
+    '''
+
     dset = MRIDataset(
         roots = roots, scarcities = scarcities, seed = seed, 
         center_fractions = center_fractions, accelerations = accelerations,
@@ -245,10 +255,7 @@ def genDataLoader(
                 sampler = sampler,
                 shuffle = False, num_workers = num_workers
             ),
-            {
-                contrast : sampler.samples_per_class
-                for contrast in dset.ratios.keys()
-            }
+            dset.ratios,
         )
     # if val or test, we will never have stratified.
     else:
