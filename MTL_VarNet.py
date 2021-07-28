@@ -6,11 +6,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-import fastmri
-from fastmri.data import transforms
-from fastmri.models.unet import Unet
-from fastmri.models.varnet import *
-
 from torch.utils.tensorboard import SummaryWriter
 
 from dloader import genDataLoader
@@ -42,17 +37,35 @@ parser.add_argument(
 
 
 # model training
+# parser.add_argument(
+#     '--numblocks', default=12, type=int,
+#     help='number of unrolled blocks in total for one forward pass'
+# )
+# parser.add_argument(
+#     '--beginblocks', default=0, type=int,
+#     help='number of unrolled, split blocks before trunk starts'
+# )
+# parser.add_argument(
+#     '--sharedblocks', default=6, type=int,
+#     help='number of unrolled blocks in trunk'
+# )
+
 parser.add_argument(
-    '--numblocks', default=12, type=int,
-    help='number of unrolled blocks in total for one forward pass'
-)
-parser.add_argument(
-    '--beginblocks', default=0, type=int,
-    help='number of unrolled, split blocks before trunk starts'
-)
-parser.add_argument(
-    '--sharedblocks', default=6, type=int,
-    help='number of unrolled blocks in trunk'
+    '--blockstructures', nargs='+',
+    default=[
+        'trueshare', 'mhushare', 'trueshare', 'mhushare',
+        'trueshare', 'split', 'trueshare', 'split',
+        'trueshare', 'split', 'trueshare', 'split',
+    ],
+    help='''explicit list of what each block will be;
+    defines total number of blocks;
+    possible options = [
+        trueshare, mhushare, split
+    ]
+    trueshare block shares encoder and decoder;
+    mhushare block shares encoder but not decoder;
+    split does not share anything
+    '''
 )
 
 parser.add_argument(
@@ -127,7 +140,7 @@ parser.add_argument(
 # save / display data
 parser.add_argument(
     '--experimentname', default='unnamed_experiment',
-    help='experiment name i.e. STL or MTAN_pareto etc.'
+    help='experiment name i.e. STL or MTAN_pareto or MHU_naive_etc'
 )
 parser.add_argument(
     '--verbose', default=1, type=int,
@@ -144,7 +157,10 @@ parser.add_argument(
 
 opt = parser.parse_args()
 
-
+# validation of user inputs
+for structure in opt.blockstructures:
+    assert structure in ['trueshare', 'mhushare', 'split'], \
+           f'{structure} is not yet a supported block structure'
 
 
 

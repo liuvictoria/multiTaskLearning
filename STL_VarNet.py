@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import numpy as np
 
@@ -181,7 +182,11 @@ def main(opt):
             opt,
         )
         
-        
+with open(
+    os.path.join(run_name,'parameters.json'), 'w'
+    ) as parameter_file:
+   json.dump(vars(opt), parameter_file)  
+
 main(opt)
 writer_tensorboard.flush()
 writer_tensorboard.close()

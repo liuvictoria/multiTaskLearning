@@ -258,7 +258,7 @@ def multi_task_trainer(
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now
-            cost[contrast][0] += loss.item() / weights[contrast] # undo weighting to get on same scales
+            cost[contrast][0] += loss.item()
             # ssim, psnr, nrmse
             for j in range(3):
                 cost[contrast][j + 1] += metrics(im_fs, im_us)[j]

@@ -122,41 +122,7 @@ def plot_quadrant(im_fs: torch.Tensor, im_us: torch.Tensor):
     return fig
 
 
-def _param_dict_STL(lr, epochs, numblocks, undersampling, center_fractions):
-    params = {}
-    params['lr'] = lr
-    params['epochs'] = epochs
-    params['number of blocks'] = numblocks
-    
-    for i in range(len(undersampling)):
-        params[f'accerlation_{i}'] = undersampling[i]
-    
-    for i in range(len(center_fractions)):
-        params[f'center_fraction_{i}'] = center_fractions[i]
-        
-    return params
 
-
-def _param_dict_MTL(
-    lr, epochs, 
-    numblocks, 
-    undersampling, center_fractions,
-    sharedtrunk, weighting
-):
-    params = {}
-    params['lr'] = lr
-    params['epochs'] = epochs
-    params['number of blocks'] = numblocks
-    params['shared percentage'] = sharedtrunk
-    params['weighting'] = weighting
-    
-    for i in range(len(undersampling)):
-        params[f'accerlation_{i}'] = undersampling[i]
-    
-    for i in range(len(center_fractions)):
-        params[f'center_fraction_{i}'] = center_fractions[i]
-        
-    return params
 
 
 def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
@@ -168,26 +134,6 @@ def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
             'parameters', 
             f'{_count_parameters(model)} parameters'
         )
-        
-        if 'STL' in opt.experimentname:
-            writer.add_hparams(
-                _param_dict_STL( # use STL param dict
-                    opt.lr, opt.epochs, opt.numblocks, 
-                    opt.accelerations, opt.centerfracs
-                ), 
-                {'zdummy':0}
-            )
-        
-        elif 'MTL' in opt.experimentname:
-            writer.add_hparams(
-                _param_dict_MTL( # use MTL param dict
-                    opt.lr, opt.epochs, opt.numblocks, 
-                    opt.accelerations, opt.centerfracs,
-                    opt.sharedblocks, opt.weighting
-                ), 
-                {'zdummy':0}
-            )
-            
             
     if epoch >= 2:
         if len(opt.datasets) == 1:

@@ -1,3 +1,4 @@
+from collections import Counter
 import numpy as np
 
 import torch
@@ -6,9 +7,7 @@ import torch.nn as nn
 from typing import List
 
 import fastmri
-from fastmri.data import transforms
-from fastmri.models.unet import Unet
-from fastmri.models.varnet import *
+from fastmri_varnet import NormUnet
 
 
 """
@@ -180,46 +179,48 @@ class MTL_VarNet(nn.Module):
     def __init__(
         self,
         datasets: list,
-        num_cascades: int,
-        begin_blocks: int,
-        shared_blocks: int,
+        blockstructures: list,
         chans: int = 18,
         pools: int = 4,
         
     ):
         super().__init__()
-        if begin_blocks + shared_blocks > num_cascades:
-            raise ValueError(f'beginning and shared blocks are greater than the {num_cascades} allowed blocks')
-        
-        task_blocks = num_cascades - shared_blocks - begin_blocks
-        
-        # define task specific begin layers
-        self.begin_contrast1 = nn.ModuleList(
-            [VarNetBlockMTL(NormUnet(chans, pools)) for _ in range(begin_blocks)]
-        )
-        self.begin_contrast2 = nn.ModuleList(
-            [VarNetBlockMTL(NormUnet(chans, pools)) for _ in range(begin_blocks)]
-        )
 
-        # define shared trunk
-        self.trunk = nn.ModuleList(
-            [VarNetBlockMTL(NormUnet(chans, pools)) for _ in range(shared_blocks)]
-        )
-        
-        # define task specific end layers
-        self.pred_contrast1 = nn.ModuleList(
-            [VarNetBlockMTL(NormUnet(chans, pools)) for _ in range(task_blocks)]
-        )
-        self.pred_contrast2 = nn.ModuleList(
-            [VarNetBlockMTL(NormUnet(chans, pools)) for _ in range(task_blocks)]
-        )
+        # figure out how many blocks of each type:
+        block_counts = Counter(blockstructures)
+
+        self.trueshare = nn.ModuleList([
+            VarNetBlockMTL(NormUnet(
+                chans, pools, which_unet = 'Unet',
+                )) for _ in range(block_counts['trueshare'])
+        ])
+
+        self.mhushare = nn.ModuleList([
+            VarNetBlockMTL(NormUnet(
+                chans, pools, which_unet = 'MHUnet', contrast_count = 2,
+                )) for _ in range(block_counts['mhushare'])
+        ])
+
+        self.split_contrast1 = nn.ModuleList([
+            VarNetBlockMTL(NormUnet(
+                chans, pools, which_unet = 'Unet',
+                )) for _ in range(block_counts['split'])
+        ])
+
+        self.split_contrast2 = nn.ModuleList([
+            VarNetBlockMTL(NormUnet(
+                chans, pools, which_unet= 'Unet',
+                )) for _ in range(block_counts['split'])
+        ])
+
+        self.blockstructures = blockstructures
 
         # uncert
         self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
 
-        # datasets
+        # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
         self.datasets = datasets
-
+        
     def forward(
         self,
         masked_kspace: torch.Tensor, 
@@ -230,45 +231,42 @@ class MTL_VarNet(nn.Module):
         
         kspace_pred = masked_kspace.clone()
 
-        # contrast int for the block to determine which eta to use
+        # contrast int for the block to determine which eta / 
         if contrast == self.datasets[0]:
             int_contrast = 0
         elif contrast == self.datasets[1]:
             int_contrast = 1
         else:
             raise ValueError(f'{contrast} is not in opt.datasets')
-
-        # beginning, separate branches
-        if contrast == self.datasets[0]:
-            for cascade in self.begin_contrast1:
-                kspace_pred = cascade(
-                    kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
-                    )
-                
-        elif contrast == self.datasets[1]:
-            for cascade in self.begin_contrast2:
-                kspace_pred = cascade(
-                    kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
-                    )
-
-        # merge into trunk
-        for cascade in self.trunk:
-            kspace_pred = cascade(
-                kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
-                )
         
-        # split again
-        if contrast == self.datasets[0]:
-            for cascade in self.pred_contrast1:
-                kspace_pred = cascade(
-                    kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast
-                    )
-                
-        elif contrast == self.datasets[1]:
-            for cascade in self.pred_contrast2:
-                kspace_pred = cascade(
+        # make iterables for each type of block
+        trueshare_loader = iter(self.trueshare)
+        mhushare_loader = iter(self.mhushare)
+        split_contrast1_loader = iter(self.split_contrast1)
+        split_contrast2_loader = iter(self.split_contrast2)
+        
+        # go thru the blocks (usually 12)
+        for structure in self.blockstructures:
+            if structure == 'trueshare':
+                kspace_pred = next(trueshare_loader(
                     kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
-                    )
+                ))
+            elif structure == 'mhushare':
+                kspace_pred = next(mhushare_loader(
+                    kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
+                ))
+
+            elif structure == 'split':
+                if contrast == self.datasets[0]:
+                    kspace_pred = next(split_contrast1_loader(
+                        kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
+                    ))
+                elif contrast == self.datasets[1]:
+                    kspace_pred = next(split_contrast2_loader(
+                        kspace_pred, masked_kspace, mask, esp_maps, int_contrast = int_contrast,
+                    ))
+            else:
+                raise ValueError(f'{structure} block structure not supported')
         
         im_coil = fastmri.ifft2c(kspace_pred)
         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(
