@@ -34,9 +34,14 @@ parser.add_argument(
     '--lr', default=0.0002, type=float,
     help='learning rate'
 )
+parser.add_argument(
+    '--gradaccumulation', default=2, type=int,
+    help='how many iterations per gradient accumulation'
+)
 
 
 # model training
+
 # parser.add_argument(
 #     '--numblocks', default=12, type=int,
 #     help='number of unrolled blocks in total for one forward pass'
@@ -77,6 +82,7 @@ parser.add_argument(
     '--temp', default=2.0, type=float, 
     help='temperature for DWA (must be positive)'
 )
+
 parser.add_argument(
     '--weighting', default='naive',
     help='naive, uncert, dwa, pareto'

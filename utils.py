@@ -79,15 +79,32 @@ def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):
     return ssim, psnr, nrmse
 
 
-
-
-
-
 """
-=========== customized TensorBoard ============= 
+=========== Hook ============= 
       plotting and tensorboard user facing;
    functions beginning with _ are helper funcs
 """
+class Hook():
+    def __init__(
+        self, 
+        module: nn.Module, 
+        accumulated_by: int = None,
+        ):
+        
+        assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
+        self.accumulated_by = accumulated_by
+        self.hook = module.register_full_backward_hook(self.hook_fn)
+
+    def hook_fn(self, module, input, output):
+        print (f'creating hook divided {accumulated_by}')
+        return output / self.accumulated_by
+
+    def close(self):
+        self.hook.remove()
+
+
+
+
 
 def _count_parameters(model):
     return sum(
@@ -128,6 +145,8 @@ def plot_quadrant(im_fs: torch.Tensor, im_us: torch.Tensor):
 def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
     '''
     weights = None implies STL; weights should be dict of weights
+    note that epoch may also represent iteration; 
+    since it's just x-axis, not changing the variable name
     '''
     if epoch == 0:
         writer.add_text(

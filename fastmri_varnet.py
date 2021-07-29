@@ -117,6 +117,8 @@ class NormUnet(nn.Module):
     def forward(
         self, 
         x: torch.Tensor,
+        contrast_batches: List[int],
+        create_hooks: bool,
         int_contrast: int = 0,
         ) -> torch.Tensor:
         if not x.shape[-1] == 2:
@@ -127,7 +129,10 @@ class NormUnet(nn.Module):
         x, mean, std = self.norm(x)
         x, pad_sizes = self.pad(x)
 
-        x = self.unet(x, int_contrast = int_contrast)
+        x = self.unet(
+            x, int_contrast = int_contrast,
+            contrast_batches = contrast_batches, create_hooks = create_hooks,
+            )
 
         # get shapes back and unnormalize
         x = self.unpad(x, *pad_sizes)

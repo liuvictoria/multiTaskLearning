@@ -8,21 +8,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from typing import List
-
-class Hook():
-    def __init__(
-        self, 
-        module: nn.Module, 
-        accumulated_by: int = None,
-        ):
-        assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
-        self.accumulated_by = accumulated_by
-        self.hook = module.register_full_backward_hook(self.hook_fn)
-    def hook_fn(self, module, input, output):
-        print (f'creating hook divided {accumulated_by}')
-        return output / self.accumulated_by
-    def close(self):
-        self.hook.remove()
+from utils import Hook
 
 
 class MHUnet(nn.Module):
@@ -106,21 +92,15 @@ class MHUnet(nn.Module):
         '''
         full backward hooks for gradient accumulation
         '''
-        # remove all previous hooks (hooks change w/ randomized train loader)
-        for shared_hook in self.shared_hooks:
-            shared_hook.close()
-        for decoder_head in self.split_hooks:
-            for split_hook in decoder_head:
-                split_hook.close()
-        self.shared_hooks = []
-        self.split_hooks = []
-
+        # double safety; supposedly already checked after removing hooks
+        assert len(self.shared_hooks) == 0, 'unet shared hooks not cleared'
+        assert len(self.split_hooks) == 0, 'unet split hooks not cleared'
         # register hooks for accumulated gradient
         # start with shared
-        self.shared_hooks.extend(
+        self.shared_hooks = [
             Hook(shared_module, accumulated_by = sum(contrast_batches))
             for shared_module in self.down_sample_layers
-        )
+        ]
         self.shared_hooks.extend(
             Hook(self.conv, accumulated_by = sum(contrast_batches))
         )
@@ -128,11 +108,11 @@ class MHUnet(nn.Module):
         # determine if decoder head is shared or split  
         if self.decoder_heads == 1:
             # shared
-            self.split_hooks.extend(
+            self.split_hooks = [
                 Hook(split_module, accumulated_by = sum(contrast_batches))
                 for decoder_head in self.up_transpose_convs
                 for split_module in decoder_head
-            )
+            ]
             self.split_hooks.extend(
                 Hook(split_module, accumulated_by = sum(contrast_batches))
                 for decoder_head in self.up_convs
@@ -140,11 +120,11 @@ class MHUnet(nn.Module):
             )
         else:
             # split
-            self.split_hooks.extend(
+            self.split_hooks = [
                 Hook(split_module, accumulated_by = contrast_batches[idx_head])
                 for idx_head, decoder_head in enumerate(self.up_transpose_convs)
                 for split_module in decoder_head
-            )
+            ]
             self.split_hooks.extend(
                 Hook(split_module, accumulated_by = contrast_batches[idx_head])
                 for idx_head, decoder_head in enumerate(self.up_convs)
@@ -156,8 +136,8 @@ class MHUnet(nn.Module):
         image: torch.Tensor,
         int_contrast: int,
         # for hooks: do positional, not keyword, arguments
-        contrast_batches: List[int] = None,
-        create_hooks: bool = False,
+        contrast_batches: List[int],
+        create_hooks: bool,
         ) -> torch.Tensor:
         """
         Args:
@@ -168,15 +148,29 @@ class MHUnet(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
+        # figure out what initialized architecture was, so as to forward pass
         if self.decoder_heads == 1:
             int_contrast == 0
         elif self.decoder_heads > 1:
             assert int_contrast >= 0, 'if not sharing decoder, give indiv. int_contrast'
         
+        if sum(contrast_batches) == 1:
+            # remove all previous hooks at first batch of next grad acc.
+            for shared_hook in self.shared_hooks:
+                shared_hook.close()
+            for decoder_head in self.split_hooks:
+                for split_hook in decoder_head:
+                    split_hook.close()
+            self.shared_hooks = []
+            self.split_hooks = []
+        
+        assert len(self.shared_hooks) == 0, 'did not clear unet shared hooks for next grad acc.'
+        assert len(self.split_hooks) == 0, 'did not clear unet split hooks for next grad acc.'
+
         # if true, we are in the last batch before loss.backward() for grad. acc.
         if create_hooks:
             configure_hooks(contrast_batches)
-                
+          
             
         
         stack = []

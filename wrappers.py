@@ -197,6 +197,9 @@ def multi_task_trainer(
     # for saving best validation model
     best_val_loss = np.infty
 
+    # grad accumulation
+    iteration = 0
+    contrast_batches = [0 for _ in range(len(opt.datasets))] 
 
     for epoch in range(opt.epochs):
 
@@ -236,8 +239,25 @@ def multi_task_trainer(
             kspace, mask = kspace.to(device), mask.to(device)
             esp, im_fs = esp.to(device), im_fs.to(device)
 
+            
+
+            # grad accumulation 
+            iteration += 1
+            contrast_batches[opt.datasets.index(contrast)] += 1
+
             optimizer.zero_grad()
-            _, im_us, logsigma = multi_task_model(kspace, mask, esp, contrast) # forward pass
+            # create hooks before last batch in accumulation
+            if sum(contrast_batches) == opt.gradaccumulation:
+                _, im_us, logsigma = multi_task_model(
+                    kspace, mask, esp, contrast,
+                    contrast_batches = contrast_batches, create_hooks = True,
+                    )
+            else:
+                _, im_us, logsigma = multi_task_model(
+                    kspace, mask, esp, contrast,
+                    contrast_batches = contrast_batches, create_hooks = False,
+                    )
+
             # crop so im_us has same size as im_fs
             im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
 
@@ -253,8 +273,13 @@ def multi_task_trainer(
                 # for plotting purposes
                 weights[contrast] = logsigma[idx_contrast]
 
-            loss.backward()        
-            optimizer.step()
+            loss.backward()
+            
+            # step optimizer once we've reached the right no. batches
+            if sum(contrast_batches) == opt.gradaccumulation:      
+                optimizer.step()
+                # reset contrast batches
+                contrast_batches = [0 for _ in range(len(opt.datasets))] 
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now
@@ -330,7 +355,7 @@ def multi_task_trainer(
 
         if opt.verbose:
             print(f'''
-            >Epoch: {epoch + 1:04d}
+            >EPOCH (full run-throughs of abundant dataset): {epoch + 1:04d}; ITERATION: {iteration}
             TRAIN: loss {cost['overall'][0]:.4f} | ssim {cost['overall'][1]:.4f} | psnr {cost['overall'][2]:.4f} | nrmse {cost['overall'][3]:.4f}
             VAL: loss {cost['overall'][4]:.4f} | ssim {cost['overall'][5]:.4f} | psnr {cost['overall'][6]:.4f} | nrmse {cost['overall'][7]:.4f}
 
@@ -339,4 +364,4 @@ def multi_task_trainer(
         # write to tensorboard
         ###opt###
         if opt.tensorboard:
-            write_tensorboard(writer, cost, epoch, multi_task_model, ratio, opt, weights)
+            write_tensorboard(writer, cost, iteration, multi_task_model, ratio, opt, weights)
