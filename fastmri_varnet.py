@@ -29,7 +29,7 @@ class NormUnet(nn.Module):
         in_chans: int = 2,
         out_chans: int = 2,
         drop_prob: float = 0.0,
-        which_unet: string = 'user input required',
+        which_unet: str = 'user input required',
         contrast_count: int = None,
     ):
         """

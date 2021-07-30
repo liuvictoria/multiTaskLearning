@@ -8,7 +8,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from typing import List
-from utils import Hook
+from utils import Module_Hook
 
 
 class MHUnet(nn.Module):
@@ -85,51 +85,49 @@ class MHUnet(nn.Module):
 
         # initialize categories of hooks (shared, split)
         self.shared_hooks = []
-        self.split_hooks = [[] for _ in range(decoder_heads)]
+        self.split_hooks = []
 
 
     def configure_hooks(self, contrast_batches):
         '''
         full backward hooks for gradient accumulation
         '''
-        # double safety; supposedly already checked after removing hooks
-        assert len(self.shared_hooks) == 0, 'unet shared hooks not cleared'
-        assert len(self.split_hooks) == 0, 'unet split hooks not cleared'
         # register hooks for accumulated gradient
         # start with shared
-        self.shared_hooks = [
-            Hook(shared_module, accumulated_by = sum(contrast_batches))
+        # print(f'downsample len{len(self.down_sample_layers)}')
+        self.shared_hooks.extend([
+            Module_Hook(shared_module, name = 'downsamplelayers', accumulated_by = sum(contrast_batches))
             for shared_module in self.down_sample_layers
-        ]
-        self.shared_hooks.extend(
-            Hook(self.conv, accumulated_by = sum(contrast_batches))
-        )
+        ])
+        self.shared_hooks.extend([
+            Module_Hook(self.conv, name = 'self.conv', accumulated_by = sum(contrast_batches))
+        ])
         
         # determine if decoder head is shared or split  
         if self.decoder_heads == 1:
             # shared
-            self.split_hooks = [
-                Hook(split_module, accumulated_by = sum(contrast_batches))
+            self.split_hooks.extend([
+                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = sum(contrast_batches))
                 for decoder_head in self.up_transpose_convs
                 for split_module in decoder_head
-            ]
-            self.split_hooks.extend(
-                Hook(split_module, accumulated_by = sum(contrast_batches))
+            ])
+            self.split_hooks.extend([
+                Module_Hook(split_module, name = f'{self.decoder_heads}self.up_convs', accumulated_by = sum(contrast_batches))
                 for decoder_head in self.up_convs
                 for split_module in decoder_head
-            )
+            ])
         else:
             # split
-            self.split_hooks = [
-                Hook(split_module, accumulated_by = contrast_batches[idx_head])
+            self.split_hooks.extend([
+                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = contrast_batches[idx_head])
                 for idx_head, decoder_head in enumerate(self.up_transpose_convs)
                 for split_module in decoder_head
-            ]
-            self.split_hooks.extend(
-                Hook(split_module, accumulated_by = contrast_batches[idx_head])
+            ])
+            self.split_hooks.extend([
+                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = contrast_batches[idx_head])
                 for idx_head, decoder_head in enumerate(self.up_convs)
                 for split_module in decoder_head
-            )        
+            ])        
 
     def forward(
         self, 
@@ -148,30 +146,31 @@ class MHUnet(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
-        # figure out what initialized architecture was, so as to forward pass
-        if self.decoder_heads == 1:
-            int_contrast == 0
-        elif self.decoder_heads > 1:
-            assert int_contrast >= 0, 'if not sharing decoder, give indiv. int_contrast'
         
+        ################################### 
+        # deal with hook stuff (shared encoder / split decoder)
         if sum(contrast_batches) == 1:
             # remove all previous hooks at first batch of next grad acc.
             for shared_hook in self.shared_hooks:
                 shared_hook.close()
-            for decoder_head in self.split_hooks:
-                for split_hook in decoder_head:
-                    split_hook.close()
+            for split_hook in self.split_hooks:
+                split_hook.close()
             self.shared_hooks = []
             self.split_hooks = []
-        
-        assert len(self.shared_hooks) == 0, 'did not clear unet shared hooks for next grad acc.'
-        assert len(self.split_hooks) == 0, 'did not clear unet split hooks for next grad acc.'
 
         # if true, we are in the last batch before loss.backward() for grad. acc.
         if create_hooks:
-            configure_hooks(contrast_batches)
-          
-            
+            # print(f'contrast batches{contrast_batches}, going to configure hooks next')
+            self.configure_hooks(contrast_batches)
+        else:
+            assert len(self.shared_hooks) == 0, 'did not clear unet shared hooks for next grad acc.'
+            assert len(self.split_hooks) == 0, 'did not clear unet split hooks for next grad acc.'
+        ###################################   
+        # figure out what initialized architecture was, so as to forward pass
+        if self.decoder_heads == 1:
+            int_contrast = 0
+        elif self.decoder_heads > 1:
+            assert int_contrast >= 0, 'if not sharing decoder, give indiv. int_contrast'
         
         stack = []
         output = image
@@ -180,16 +179,17 @@ class MHUnet(nn.Module):
         for layer in self.down_sample_layers:
             output = layer(output)
             stack.append(output)
+            
             output = F.avg_pool2d(output, kernel_size=2, stride=2, padding=0)
 
         output = self.conv(output)
 
         # apply up-sampling layers
         for idx_upsample, (transpose_conv, conv) in enumerate(zip(
-            self.self.up_transpose_convs[int_contrast], 
+            self.up_transpose_convs[int_contrast], 
             self.up_convs[int_contrast],
         )):
-            downsample_layer = stack[-idx_upsample]
+            downsample_layer = stack[-(idx_upsample + 1)]
             output = transpose_conv(output)
 
             # reflect pad on the right/botton if needed to handle odd input dimensions
@@ -200,7 +200,7 @@ class MHUnet(nn.Module):
                 padding[3] = 1  # padding bottom
             if torch.sum(torch.tensor(padding)) != 0:
                 output = F.pad(output, padding, "reflect")
-
+            
             output = torch.cat([output, downsample_layer], dim=1)
             output = conv(output)
 

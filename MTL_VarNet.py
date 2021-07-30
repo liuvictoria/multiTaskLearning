@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dloader import genDataLoader
 from wrappers import multi_task_trainer
-
+from utils import label_blockstructures
 
 """
 =========== Model ============
@@ -41,19 +41,6 @@ parser.add_argument(
 
 
 # model training
-
-# parser.add_argument(
-#     '--numblocks', default=12, type=int,
-#     help='number of unrolled blocks in total for one forward pass'
-# )
-# parser.add_argument(
-#     '--beginblocks', default=0, type=int,
-#     help='number of unrolled, split blocks before trunk starts'
-# )
-# parser.add_argument(
-#     '--sharedblocks', default=6, type=int,
-#     help='number of unrolled blocks in trunk'
-# )
 
 parser.add_argument(
     '--blockstructures', nargs='+',
@@ -169,13 +156,18 @@ for structure in opt.blockstructures:
            f'{structure} is not yet a supported block structure'
 
 
+"""
+=========== run/model name ============
+"""
 
 """
 =========== Runs ============
 """    
 
 # datasets
-run_name = f"runs/{opt.experimentname}_{opt.network}{opt.beginblocks}:{opt.sharedblocks}_{'_'.join(opt.datasets)}/"
+run_name = f"runs/{opt.experimentname}_" + \
+    f"{'strat_' if opt.stratified else ''}" + \
+    f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
@@ -210,9 +202,7 @@ def main(opt):
         device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
         varnet = MTL_VarNet(
             opt.datasets,
-            num_cascades = opt.numblocks,
-            begin_blocks = opt.beginblocks, 
-            shared_blocks = opt.sharedblocks
+            opt.blockstructures
             ).to(device)
 
         optimizer = torch.optim.Adam(varnet.parameters(),lr = opt.lr)

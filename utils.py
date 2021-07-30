@@ -81,30 +81,73 @@ def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):
 
 """
 =========== Hook ============= 
-      plotting and tensorboard user facing;
-   functions beginning with _ are helper funcs
+    hooks for gradient accumulation
+    involved with dividing gradient of
+    split / shared layers properly
 """
-class Hook():
+class Module_Hook():
     def __init__(
         self, 
         module: nn.Module, 
+        name: str = None,
         accumulated_by: int = None,
         ):
         
         assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
         self.accumulated_by = accumulated_by
         self.hook = module.register_full_backward_hook(self.hook_fn)
+        self.name = name
 
     def hook_fn(self, module, input, output):
-        print (f'creating hook divided {accumulated_by}')
-        return output / self.accumulated_by
+        # print (f' using module {self.name} hook divided by {self.accumulated_by}')
+        if type(input[0]) == torch.Tensor:
+            # print(type(input[0]))
+            return tuple(tensor / self.accumulated_by for tensor in input)
+  
 
     def close(self):
         self.hook.remove()
 
+class Tensor_Hook():
+    def __init__(
+        self, 
+        tensor: torch.Tensor, 
+        accumulated_by: int = None,
+        ):
+        
+        assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
+        accumulated_by = float(accumulated_by)
+        self.accumulated_by = accumulated_by
+        self.hook = tensor.register_hook(self.hook_fn)
+
+    def hook_fn(self, tensor):
+        print (f' using tensor hook divided by {self.accumulated_by}')
+        return tensor / self.accumulated_by
+
+    def close(self):
+        self.hook.remove()
+
+"""
+=========== Misc ============= 
+    naming for block structure (used in evaluate and MTL_VarNet)
+"""
+def label_blockstructures(blockstructures):
+    conversion = {
+        'trueshare' : 'I',
+        'mhushare' : 'Y',
+        'split' : 'V',
+    }
+    labels = []
+    for blockstructure in blockstructures:
+        labels.append(conversion[blockstructure])
+    return ''.join(labels)
 
 
-
+"""
+=========== Custom Tensorboard ============= 
+    utilities involved in plotting losses
+    and metrics during training and validation
+"""
 
 def _count_parameters(model):
     return sum(

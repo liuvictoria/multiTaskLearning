@@ -164,7 +164,7 @@ class BalancedSampler(Sampler):
             for label in np.unique(labels)
         }
 
-        assert method in ['downsample', 'upsample']
+        assert method in ['downsample', 'upsample'], 'method for stratification invalid'
 
         if method == 'downsample':
             samples_per_class = min(samples_per_class.values())
@@ -226,7 +226,7 @@ def genDataLoader(
     roots, scarcities,
     center_fractions, accelerations,
     shuffle, num_workers, seed=123,
-    stratified = False, method = 'downsample'
+    stratified = False, method = 'upsample'
 ):
     '''
     if shuffle = True, but stratified = True, 

@@ -8,7 +8,7 @@ from typing import List
 
 import fastmri
 from fastmri_varnet import NormUnet
-from utils import Hook
+from utils import Tensor_Hook
 
 
 """
@@ -55,7 +55,8 @@ class VarNetBlockSTL(nn.Module):
         zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
         soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.eta
         model_term = self.sens_expand(
-            self.model(self.sens_reduce(current_kspace, sens_maps)), sens_maps
+            self.model(self.sens_reduce(current_kspace, sens_maps)), 
+            sens_maps
         )
 
         return current_kspace - soft_dc - model_term
@@ -94,12 +95,10 @@ class VarNetBlockMTL(nn.Module):
         '''
         full backward hooks for gradient accumulation
         '''
-        # double check that hooks are cleared
-        assert len(self.parameter_hooks) == 0, 'VarNetBlock parameter hooks not cleared'
 
         # register hooks for accumulated gradient
         self.parameter_hooks = [
-            Hook(eta, accumulated_by = contrast_batches[idx_contrast])
+            Tensor_Hook(eta, accumulated_by = contrast_batches[idx_contrast])
             for idx_contrast, eta in enumerate(self.etas)
         ] 
 
@@ -117,18 +116,22 @@ class VarNetBlockMTL(nn.Module):
         note that contrast is not str, but rather int index of opt.datasets
         this is implemented in the VarNet portion
         '''
+        ################################### 
+        # deal with hook stuff (eta)
         if sum(contrast_batches) == 1:
             # remove all previous hooks at first batch of next grad acc.
             for parameter_hook in self.parameter_hooks:
                 parameter_hook.close()
             self.parameter_hooks = []
-        
-        assert len(self.parameter_hooks) == 0, 'did not clear VarNetBlock hooks for next grad acc.'
+            
 
         # if true, we are in the last batch before loss.backward() for grad. acc.
         if create_hooks:
-            configure_hooks(contrast_batches)
-
+            self.configure_hooks(contrast_batches)
+        else:
+            assert len(self.parameter_hooks) == 0, 'did not clear VarNetBlock hooks for next grad acc.'
+        ################################### 
+        
         mask = mask.bool()
         zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
 
@@ -141,7 +144,8 @@ class VarNetBlockMTL(nn.Module):
                 int_contrast = int_contrast,
                 contrast_batches = contrast_batches, 
                 create_hooks = create_hooks,
-                ), sens_maps
+                ), 
+                sens_maps
         )
 
         return current_kspace - soft_dc - model_term
@@ -228,26 +232,24 @@ class MTL_VarNet(nn.Module):
 
         self.mhushare = nn.ModuleList([
             VarNetBlockMTL(NormUnet(
-                chans, pools, which_unet = 'MHUnet', contrast_count = 2,
+                chans, pools, which_unet = 'MHUnet', contrast_count = len(datasets),
                 )) for _ in range(block_counts['mhushare'])
         ])
 
-        self.split_contrast1 = nn.ModuleList([
-            VarNetBlockMTL(NormUnet(
-                chans, pools, which_unet = 'Unet',
-                )) for _ in range(block_counts['split'])
-        ])
-
-        self.split_contrast2 = nn.ModuleList([
-            VarNetBlockMTL(NormUnet(
-                chans, pools, which_unet= 'Unet',
-                )) for _ in range(block_counts['split'])
-        ])
+        self.split_contrasts = nn.ModuleList()
+        for _ in enumerate(datasets):
+            self.split_contrasts.append(
+                nn.ModuleList([
+                VarNetBlockMTL(NormUnet(
+                    chans, pools, which_unet = 'Unet',
+                    )) for _ in range(block_counts['split'])
+            ])
+            )
 
         self.blockstructures = blockstructures
 
         # uncert (specifically 2 contrasts)
-        self.logsigmas = nn.Parameter(torch.FloatTensor([-0.5, -0.5,]))
+        self.logsigmas = nn.Parameter(torch.FloatTensor([-0.5 for _ in enumerate(datasets)]))
         self.uncert_hooks = []
 
         # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
@@ -257,12 +259,10 @@ class MTL_VarNet(nn.Module):
         '''
         full backward hooks for gradient accumulation
         '''
-        # double check that hooks are cleared
-        assert len(self.uncert_hooks) == 0, 'VarNet uncert hooks not cleared'
 
         # register hooks for accumulated gradient
         self.uncert_hooks = [
-            Hook(logsigma, accumulated_by = contrast_batches[idx_contrast])
+            Tensor_Hook(logsigma, accumulated_by = contrast_batches[idx_contrast])
             for idx_contrast, logsigma in enumerate(self.logsigmas)
         ] 
 
@@ -276,6 +276,24 @@ class MTL_VarNet(nn.Module):
         create_hooks: bool = False,
     ) -> torch.Tensor:
         
+        ################################### 
+        # deal with hook stuff (logsigma)
+        if sum(contrast_batches) == 1:
+            print (f'cleared VarNetBlock for {contrast_batches}')
+            # remove all previous hooks at first batch of next grad acc.
+            for uncert_hook in self.uncert_hooks:
+                uncert_hook.close()
+            self.uncert_hooks = []
+        
+        
+
+        # if true, we are in the last batch before loss.backward() for grad. acc.
+        if create_hooks:
+            self.configure_hooks(contrast_batches)
+        else:
+            assert len(self.uncert_hooks) == 0, 'did not clear VarNet uncert hooks for next grad acc.'
+        ####################################
+
         kspace_pred = masked_kspace.clone()
 
         # contrast int for the block to determine which eta / 
@@ -283,54 +301,38 @@ class MTL_VarNet(nn.Module):
             int_contrast = self.datasets.index(contrast)
         except:
             raise ValueError(f'{contrast} is not in self.datasets')
-        
-        
-        if sum(contrast_batches) == 1:
-            # remove all previous hooks at first batch of next grad acc.
-            for uncert_hook in self.uncert_hooks:
-                uncert_hook.close()
-            self.uncert_hooks = []
-        
-        assert len(self.parameter_hooks) == 0, 'did not clear VarNetBlock hooks for next grad acc.'
 
-        # if true, we are in the last batch before loss.backward() for grad. acc.
-        if create_hooks:
-            configure_hooks(contrast_batches)
-        
-        # make iterables for each type of block
-        trueshare_loader = iter(self.trueshare)
-        mhushare_loader = iter(self.mhushare)
-        split_contrast1_loader = iter(self.split_contrast1)
-        split_contrast2_loader = iter(self.split_contrast2)
-        
+        # make counter for each type of block
+        counter = [0 for _ in range(3)] # currently three types of blocks
+
         # go thru the blocks (usually 12)
-        for structure in self.blockstructures:
+        for idx_structure, structure in enumerate(self.blockstructures):
+            print (f'on {idx_structure} block, {structure}')
             if structure == 'trueshare':
-                kspace_pred = next(trueshare_loader(
+                kspace_pred = self.trueshare[counter[0]](
                     kspace_pred, masked_kspace, mask, esp_maps, 
                     int_contrast = int_contrast, 
-                    contrast_batches = contrast_batches, create_hooks = create_hooks,
-                ))
+                    contrast_batches = contrast_batches, 
+                    create_hooks = create_hooks,
+                )
+                counter[0] += 1
             elif structure == 'mhushare':
-                kspace_pred = next(mhushare_loader(
+                kspace_pred = self.mhushare[counter[1]](
                     kspace_pred, masked_kspace, mask, esp_maps, 
                     int_contrast = int_contrast,
-                    contrast_batches = contrast_batches, create_hooks = create_hooks,
-                ))
+                    contrast_batches = contrast_batches, 
+                    create_hooks = create_hooks,
+                )
+                counter[1] += 1
 
             elif structure == 'split':
-                if contrast == self.datasets[0]:
-                    kspace_pred = next(split_contrast1_loader(
+                kspace_pred = self.split_contrasts[int_contrast][counter[2]](
                         kspace_pred, masked_kspace, mask, esp_maps, 
                         int_contrast = int_contrast, 
-                        contrast_batches = contrast_batches, create_hooks = create_hooks,
-                    ))
-                elif contrast == self.datasets[1]:
-                    kspace_pred = next(split_contrast2_loader(
-                        kspace_pred, masked_kspace, mask, esp_maps, 
-                        int_contrast = int_contrast, 
-                        contrast_batches = contrast_batches, create_hooks = create_hooks,
-                    ))
+                        contrast_batches = contrast_batches, 
+                        create_hooks = create_hooks,
+                        # if idx_structure + 1 == len(self.blockstructures) else False,
+                    )
             else:
                 raise ValueError(f'{structure} block structure not supported')
         
