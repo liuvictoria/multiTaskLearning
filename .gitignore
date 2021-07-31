@@ -1,1 +1,16 @@
 *.pyc
+nohup.out
+.vscode/settings.json
+*.json
+.ipynb_checkpoints
+.vscode
+*__pycache__
+*.pt
+/runs/
+/plots/
+runs_sens/
+/models/
+/development/prev plots/
+*events.out.tfevents.*
+/development/
+*.html
