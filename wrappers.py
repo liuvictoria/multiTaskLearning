@@ -6,7 +6,7 @@ import torch
 from fastmri.data import transforms
 
 from utils import criterion, metrics
-from utils import plot_quadrant, write_tensorboard
+from utils import label_blockstructures, plot_quadrant, write_tensorboard
 
 
 """
@@ -243,16 +243,19 @@ def multi_task_trainer(
 
             # grad accumulation 
             iteration += 1
+            print (f'iteration {iteration}')
             contrast_batches[opt.datasets.index(contrast)] += 1
 
             optimizer.zero_grad()
             # create hooks before last batch in accumulation
             if sum(contrast_batches) == opt.gradaccumulation:
+                # forward
                 _, im_us, logsigma = multi_task_model(
                     kspace, mask, esp, contrast,
                     contrast_batches = contrast_batches, create_hooks = True,
                     )
             else:
+                # forward
                 _, im_us, logsigma = multi_task_model(
                     kspace, mask, esp, contrast,
                     contrast_batches = contrast_batches, create_hooks = False,
@@ -301,7 +304,11 @@ def multi_task_trainer(
                 kspace, mask = kspace.to(device), mask.to(device)
                 esp, im_fs = esp.to(device), im_fs.to(device)
 
-                _, im_us, logsigma = multi_task_model(kspace, mask, esp, contrast) # forward pass
+                _, im_us, logsigma = multi_task_model(
+                    kspace, mask, esp, contrast,
+                    contrast_batches = [1],
+                    create_hooks = False,
+                    ) # forward pass
                 # crop so im_us has same size as im_fs
                 im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
                 loss = criterion(im_fs, im_us)
@@ -343,7 +350,9 @@ def multi_task_trainer(
         # early stopping
         if cost['overall'][4] < best_val_loss:
             best_val_loss = cost['overall'][4]
-            filedir = f"models/{opt.experimentname}_{opt.network}{opt.sharedblocks}_{'_'.join(opt.datasets)}"
+            filedir = f"models/{opt.experimentname}_" + \
+                        f"{'strat_' if opt.stratified else ''}" + \
+                        f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
             if not os.path.isdir(filedir):
                 os.makedirs(filedir)
             torch.save(

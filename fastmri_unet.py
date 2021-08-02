@@ -94,7 +94,6 @@ class MHUnet(nn.Module):
         '''
         # register hooks for accumulated gradient
         # start with shared
-        # print(f'downsample len{len(self.down_sample_layers)}')
         self.shared_hooks.extend([
             Module_Hook(shared_module, name = 'downsamplelayers', accumulated_by = sum(contrast_batches))
             for shared_module in self.down_sample_layers
@@ -160,7 +159,6 @@ class MHUnet(nn.Module):
 
         # if true, we are in the last batch before loss.backward() for grad. acc.
         if create_hooks:
-            # print(f'contrast batches{contrast_batches}, going to configure hooks next')
             self.configure_hooks(contrast_batches)
         else:
             assert len(self.shared_hooks) == 0, 'did not clear unet shared hooks for next grad acc.'

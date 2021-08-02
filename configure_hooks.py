@@ -1,3 +1,134 @@
+from utils import Tensor_Hook, Module_Hook
+
+
+"""
+=========== VARNET_BLOCK MTL============
+difference arises from two etas / need to pass in contrast for MTL
+"""
+
+class VarNetBlockMTL(nn.Module):
+    """
+    This model applies a combination of soft data consistency with the input
+    model as a regularizer. A series of these blocks can be stacked to form
+    the full variational network.
+    Adds 
+    """
+
+    def __init__(self, model: nn.Module, datasets: List[str]):
+        """
+        Args:
+            model: Module for "regularization" component of variational
+                network.
+        """
+        
+        self.parameter_hooks = []
+  
+
+    def configure_hooks(self, contrast_batches):
+        '''
+        full backward hooks for gradient accumulation
+        '''
+        self.debug += 1
+
+        # register hooks for accumulated gradient; don't need hook for etas
+        self.parameter_hooks = [
+            Tensor_Hook(eta, name = f'eta{self.debug}', accumulated_by = contrast_batches[idx_contrast])
+            for idx_contrast, eta in enumerate(self.etas)
+        ] 
+
+    def forward(
+        self,
+        current_kspace: torch.Tensor,
+        ref_kspace: torch.Tensor,
+        mask: torch.Tensor,
+        sens_maps: torch.Tensor,
+        int_contrast: int,
+        contrast_batches: List[int] = None,
+        create_hooks: bool = False,
+    ) -> torch.Tensor:
+        '''
+        note that contrast is not str, but rather int index of opt.datasets
+        this is implemented in the VarNet portion
+        '''
+        ################################### 
+        # deal with hook stuff (eta)
+        if sum(contrast_batches) == 1:
+            # remove all previous hooks at first batch of next grad acc.
+            for parameter_hook in self.parameter_hooks:
+                parameter_hook.close()
+            # self.parameter_hooks = []
+            
+
+        # if true, we are in the last batch before loss.backward() for grad. acc.
+        if create_hooks:
+            self.configure_hooks(contrast_batches)
+        # else:
+        #     assert len(self.parameter_hooks) == 0, 'did not clear VarNetBlock hooks for next grad acc.'
+        ################################### 
+    
+
+
+"""
+=========== MTL_VarNet ============
+"""
+
+class MTL_VarNet(nn.Module):
+    """
+    A full variational network model.
+
+    This model applies a combination of soft data consistency with a U-Net
+    regularizer. To use non-U-Net regularizers, use VarNetBock.
+    """
+
+    def __init__(
+        self,
+        datasets: list,
+        blockstructures: list,
+        chans: int = 18,
+        pools: int = 4,
+        
+    ):
+        super().__init__()
+
+        self.uncert_hooks = []
+
+    def configure_hooks(self, contrast_batches):
+        '''
+        full backward hooks for gradient accumulation
+        '''
+        self.debug += 1
+        # register hooks for accumulated gradient
+        self.uncert_hooks = [
+            Tensor_Hook(logsigma, name = f'uncert hook{self.debug}', accumulated_by = contrast_batches[idx_contrast])
+            for idx_contrast, logsigma in enumerate(self.logsigmas)
+        ] 
+
+    def forward(
+        self,
+        masked_kspace: torch.Tensor, 
+        mask: torch.Tensor,
+        esp_maps: torch.Tensor,
+        contrast: str,
+        contrast_batches: List[int] = None,
+        create_hooks: bool = False,
+    ) -> torch.Tensor:
+        
+        ################################### 
+        # deal with hook stuff (logsigma)
+        if sum(contrast_batches) == 1:
+            # remove all previous hooks at first batch of next grad acc.
+            for uncert_hook in self.uncert_hooks:
+                uncert_hook.close()
+
+        # if true, we are in the last batch before loss.backward() for grad. acc.
+        if create_hooks:
+            self.configure_hooks(contrast_batches)
+        ####################################
+
+
+
+
+
 from collections import Counter
 import numpy as np
 
@@ -83,6 +214,7 @@ class VarNetBlockMTL(nn.Module):
             for _ in datasets
             )
         self.parameter_hooks = []
+        self.debug = 0
         
 
     def sens_expand(self, x: torch.Tensor, sens_maps: torch.Tensor) -> torch.Tensor:
@@ -98,10 +230,11 @@ class VarNetBlockMTL(nn.Module):
         '''
         full backward hooks for gradient accumulation
         '''
+        self.debug += 1
 
         # register hooks for accumulated gradient; don't need hook for etas
         self.parameter_hooks = [
-            Tensor_Hook(eta, name = f'eta', accumulated_by = contrast_batches[idx_contrast])
+            Tensor_Hook(eta, name = f'eta{self.debug}', accumulated_by = contrast_batches[idx_contrast])
             for idx_contrast, eta in enumerate(self.etas)
         ] 
 
@@ -233,7 +366,6 @@ class MTL_VarNet(nn.Module):
                 datasets
                 ) for _ in range(block_counts['trueshare'])
         ])
-        
 
         self.mhushare = nn.ModuleList([
             VarNetBlockMTL(
@@ -263,15 +395,17 @@ class MTL_VarNet(nn.Module):
 
         # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
         self.datasets = datasets
-    
+
+        self.debug = 0
 
     def configure_hooks(self, contrast_batches):
         '''
         full backward hooks for gradient accumulation
         '''
+        self.debug += 1
         # register hooks for accumulated gradient
         self.uncert_hooks = [
-            Tensor_Hook(logsigma, name = f'uncert hook', accumulated_by = contrast_batches[idx_contrast])
+            Tensor_Hook(logsigma, name = f'uncert hook{self.debug}', accumulated_by = contrast_batches[idx_contrast])
             for idx_contrast, logsigma in enumerate(self.logsigmas)
         ] 
 
@@ -284,7 +418,7 @@ class MTL_VarNet(nn.Module):
         contrast_batches: List[int] = None,
         create_hooks: bool = False,
     ) -> torch.Tensor:
-        print(self.trueshare[0].model.unet.down_sample_layers[0])
+        
         ################################### 
         # deal with hook stuff (logsigma)
         if sum(contrast_batches) == 1:

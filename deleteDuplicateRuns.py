@@ -20,11 +20,17 @@ parser.add_argument(
     required = True,
 )
 
+parser.add_argument(
+    '--rundir',
+    help='''directory of runs''',
+    required = True,
+)
+
 opt = parser.parse_args()
 
 
 for runname in opt.runnames:
-    os.chdir(f'./runs/{runname}')
+    os.chdir(os.path.join(opt.rundir, runname))
     root = os.getcwd()
     listItems = os.listdir()
     for directory in listItems:

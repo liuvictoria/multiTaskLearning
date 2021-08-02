@@ -205,7 +205,7 @@ def main(opt):
             opt.blockstructures
             ).to(device)
 
-        optimizer = torch.optim.Adam(varnet.parameters(),lr = opt.lr)
+        optimizer = torch.optim.Adam(varnet.parameters(), lr = opt.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
         print('start training')
         multi_task_trainer(

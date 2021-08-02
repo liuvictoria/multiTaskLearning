@@ -23,8 +23,10 @@ from bokeh.palettes import Category20_10, Category20c_20, Paired10, Set1_8, Set2
 from fastmri.data import transforms
 from utils import criterion, metrics
 from utils import plot_quadrant
+from utils import interpret_blockstructures
 
 ### add to this every time new model is trained ###
+from models_backcompat import MTL_VarNet_backcompat
 from models import STL_VarNet
 from models import MTL_VarNet
         
@@ -34,28 +36,71 @@ parser = argparse.ArgumentParser(
 )
 
 # model stuff
-############## required ##############
+# backcompat stuff
 parser.add_argument(
-    '--numblocks', type=int, nargs = '+',
+    '--backcompat', type=int, nargs='+',
+    help='''whether to use back-compatible model
+    with begin_blocks and shared_blocks and num_cascades
+    arguments''',
+    required = True,
+)
+
+# backcompat / STL stuff (don't delete)
+parser.add_argument(
+    '--numblocks', default = [], type=int, nargs = '+',
     help='''number of unrolled blocks in total for one forward pass;
     match to each experimentnames''',
-    required = True,
 )
+
+# backcompat stuff
+parser.add_argument(
+    '--beginblocks', default = [], type=int, nargs = '+',
+    help='''number of unrolled blocks in total for one forward pass;
+    match to each experimentnames''',
+)
+
+# backcompat stuff
+parser.add_argument(
+    '--sharedblocks', default = [], type=int, nargs = '+',
+    help='''number of unrolled blocks in total for one forward pass;
+    match to each experimentnames''',
+)
+
 ############## required ##############
 parser.add_argument(
-    '--beginblocks', type=int, nargs = '+',
-    help='''number of unrolled blocks before shared trunk; 
-    only for MTL; for STL, use 0; 
-    match to each experimentnames''',
+    '--blockstructures', nargs='+',
+    default = [],
+    help='''explicit string of what each block is in MTL network;
+    i.e. IYYIVVIYV
+    I : trueshare
+    Y : mhushare
+    V : split
+    trueshare block shares encoder and decoder;
+    mhushare block shares encoder but not decoder;
+    split does not share anything.
+    For STL, type STL for all 12 blocks
+    ''',
     required = True,
 )
+
 ############## required ##############
 parser.add_argument(
-    '--sharedblocks', type=int, nargs = '+',
-    help='''number of unrolled blocks in trunk; 
-    only for MTL; for STL, use 0; 
-    match to each experimentnames''',
+    '--stratified', type=int, nargs='+',
+    help='''used to find the model name; give as list
+    0 for STL experiments''',
     required = True,
+)
+
+############## required ##############
+parser.add_argument(
+    '--scarcemax', type=int,
+    help='''497 for div_coronal_pd_fs''',
+    required = True,
+)
+
+parser.add_argument(
+    '--modeldir', default='/mnt/dense/vliu/models/',
+    help='models root directory; where are pretrained models are'
 )
 ############## required ##############
 parser.add_argument(
@@ -206,13 +251,15 @@ def _initialize_plots(opt):
         # name paths
         #scarce
         scarce_path = Path(os.path.join(
-            f"models/STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
-            f'summary_{opt.datasets[0]}.csv'
+            opt.modeldir, 
+            f"STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
+            f'summary_{opt.datasets[0]}.csv',
         ))
 
         # abundant
         abundant_path = Path(os.path.join(
-            f'models/STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
+            opt.modeldir,
+            f'STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
             f'summary_{opt.datasets[1]}.csv'
         ))
 
@@ -359,15 +406,15 @@ def df_single_contrast_all_models(
             
             # define x axis
             model = model.split('~') # 0 is STL_varnet_etc, 1 is N=_N=_etc
-            ratio_1 = int(model[1].split('_')[0].split('=')[1])
+            ratio_1 = int(model[-1].split('_')[0].split('=')[1])
             df_row[idx_model, 4] = ratio_1
 
             if opt.mixeddata[idx_experimentname]:
-                ratio_2 = int(model[1].split('_')[1].split('=')[1])
+                ratio_2 = int(model[-1].split('_')[1].split('=')[1])
                 df_row[idx_model, 5] = ratio_2
 
     # fraction instead of absolute no. slices
-    df_row[:, 4] /= np.max(df_row[:, 4])
+    df_row[:, 4] /= opt.scarcemax
     if opt.mixeddata[idx_experimentname]:
         df_row[:, 5] /= np.max(df_row[:, 5])
 
@@ -384,26 +431,33 @@ def _get_model_filedir(dataset, opt, idx_experimentname):
     # normally, we are in mixeddata case
     if opt.mixeddata[idx_experimentname]:
         # MTL (experimental)
-        if opt.sharedblocks[idx_experimentname] != 0:
-            model_filedir = f"models/" + \
+        if opt.blockstructures[idx_experimentname] != 'STL':
+            model_filedir = os.path.join(
+                opt.modeldir,
                 f"{opt.experimentnames[idx_experimentname]}_" + \
+                f"{'strat_' if opt.stratified[idx_experimentname] else ''}" + \
                 f"{opt.network[idx_experimentname]}" + \
-                f"{opt.beginblocks[idx_experimentname]}:{opt.sharedblocks[idx_experimentname]}_" +\
+                f"{opt.blockstructures[idx_experimentname]}_" +\
                 f"{'_'.join(opt.datasets)}"
+            )
 
         # STL mixed (control)
         else:
-            model_filedir = f"models/" + \
+            model_filedir = os.path.join(
+                opt.modeldir,
                 f"{opt.experimentnames[idx_experimentname]}_" + \
                 f"{opt.network[idx_experimentname]}_" + \
                 f"{'_'.join(opt.datasets)}"
+            )
 
     # only for STL where data are not mixed (control)
     else:
-        model_filedir = f"models/" + \
+        model_filedir = os.path.join(
+            opt.modeldir,
             f"{opt.experimentnames[idx_experimentname]}_" + \
             f"{opt.network[idx_experimentname]}_" + \
             f"{dataset}"
+        )
     
     if not os.path.isdir(model_filedir):
         raise ValueError(f'{model_filedir} is not valid dir')
@@ -419,13 +473,23 @@ def _get_model_info(dataset, opt, idx_experimentname):
                 ).to(opt.device)
                 
     elif 'MTL' in opt.experimentnames[idx_experimentname]:
-        with torch.no_grad():
-            the_model = MTL_VarNet(
-                datasets = opt.datasets,
-                num_cascades = opt.numblocks[idx_experimentname],
-                begin_blocks = opt.beginblocks[idx_experimentname],
-                shared_blocks = opt.sharedblocks[idx_experimentname],
-                ).to(opt.device)
+        if opt.backcompat[idx_experimentname]:
+            with torch.no_grad():
+                the_model = MTL_VarNet_backcompat(
+                    datasets = opt.datasets,
+                    num_cascades = opt.numblocks[idx_experimentname],
+                    # begin_blocks = opt.beginblocks[idx_experimentname],
+                    shared_blocks = opt.sharedblocks[idx_experimentname],
+                    ).to(opt.device)
+    
+        else:
+            with torch.no_grad():
+                the_model = MTL_VarNet(
+                    datasets = opt.datasets,
+                    blockstructures = interpret_blockstructures(
+                        opt.blockstructures[idx_experimentname]
+                        ),
+                    ).to(opt.device)
     
     else:
         raise ValueError(f'{opt.experimentnames[idx_experimentname]} not valid')

@@ -94,7 +94,9 @@ class Module_Hook():
         ):
         
         assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
-        self.accumulated_by = accumulated_by
+        accumulate_by = float(accumulated_by)
+
+        self.accumulated_by = 1
         self.hook = module.register_full_backward_hook(self.hook_fn)
         self.name = name
 
@@ -108,23 +110,28 @@ class Module_Hook():
     def close(self):
         self.hook.remove()
 
+
 class Tensor_Hook():
     def __init__(
         self, 
-        tensor: torch.Tensor, 
+        tensor: torch.Tensor,
+        name: str = None, 
         accumulated_by: int = None,
         ):
-        
+        print (f'creating hook {name}')
         assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
         accumulated_by = float(accumulated_by)
-        self.accumulated_by = accumulated_by
+        self.accumulated_by = 1
         self.hook = tensor.register_hook(self.hook_fn)
+        self.name = name
+        tensor.retain_grad()
 
     def hook_fn(self, tensor):
-        print (f' using tensor hook divided by {self.accumulated_by}')
+        print (f' using tensor hook {self.name}, divided by {self.accumulated_by}')
         return tensor / self.accumulated_by
 
     def close(self):
+        print(f'removed hook {self.name}')
         self.hook.remove()
 
 """
@@ -141,6 +148,17 @@ def label_blockstructures(blockstructures):
     for blockstructure in blockstructures:
         labels.append(conversion[blockstructure])
     return ''.join(labels)
+
+def interpret_blockstructures(blockstructures):
+    conversion = {
+        'I' : 'trueshare',
+        'Y' : 'mhushare',
+        'V' : 'split',
+    }
+    labels = []
+    for blockstructure in blockstructures:
+        labels.append(conversion[blockstructure])
+    return labels
 
 
 """
