@@ -68,8 +68,9 @@ parser.add_argument(
 
 ############## required ##############
 parser.add_argument(
-    '--blockstructures', nargs='+',
+    '--blockstructures',
     default = [],
+    nargs='+',
     help='''explicit string of what each block is in MTL network;
     i.e. IYYIVVIYV
     I : trueshare
@@ -78,7 +79,7 @@ parser.add_argument(
     trueshare block shares encoder and decoder;
     mhushare block shares encoder but not decoder;
     split does not share anything.
-    For STL, type STL for all 12 blocks
+    For STL, type 'S' for all 12 blocks
     ''',
     required = True,
 )
@@ -323,6 +324,7 @@ def df_single_contrast_all_models(
     '''
     creates dataframe ready for bokeh plotting
     '''
+
     # check if this has already been run; if yes, don't rerun
     summary_file = Path(
         os.path.join(
@@ -331,7 +333,20 @@ def df_single_contrast_all_models(
     )
     if summary_file.is_file():
         print (    f'  evaluation {summary_file} has been run before and will be used for current plot')
-        return pd.read_csv(summary_file).drop('Unnamed: 0', axis = 1)
+        print (pd.read_csv(
+            summary_file
+            ).drop(
+            'Unnamed: 0', axis = 1
+            ).sort_values(
+                by=[opt.datasets[0]]
+        ))
+        return pd.read_csv(
+            summary_file
+            ).drop(
+            'Unnamed: 0', axis = 1
+            ).sort_values(
+                by=[opt.datasets[0]]
+            )
 
     modelpaths = glob.glob(f"{model_filedir}/*.pt")
     
@@ -343,6 +358,7 @@ def df_single_contrast_all_models(
             opt.plotnames[2], opt.plotnames[3], 
             opt.datasets[0], opt.datasets[1]
             ]
+        sort_by = opt.datasets[0]
     else:
         df_row = np.zeros([len(modelpaths), 5])
         columns = [
@@ -350,6 +366,7 @@ def df_single_contrast_all_models(
             opt.plotnames[2], opt.plotnames[3], 
             contrast
             ]
+        sort_by = contrast
     
     
     with torch.no_grad():
@@ -423,6 +440,7 @@ def df_single_contrast_all_models(
         df_row,
         columns=columns
     )
+    df = df.sort_values(by=[sort_by])
     df.to_csv(summary_file)
 
     return df
@@ -431,7 +449,7 @@ def _get_model_filedir(dataset, opt, idx_experimentname):
     # normally, we are in mixeddata case
     if opt.mixeddata[idx_experimentname]:
         # MTL (experimental)
-        if opt.blockstructures[idx_experimentname] != 'STL':
+        if opt.blockstructures[idx_experimentname] != 'S':
             model_filedir = os.path.join(
                 opt.modeldir,
                 f"{opt.experimentnames[idx_experimentname]}_" + \
@@ -478,7 +496,7 @@ def _get_model_info(dataset, opt, idx_experimentname):
                 the_model = MTL_VarNet_backcompat(
                     datasets = opt.datasets,
                     num_cascades = opt.numblocks[idx_experimentname],
-                    # begin_blocks = opt.beginblocks[idx_experimentname],
+                    begin_blocks = opt.beginblocks[idx_experimentname],
                     shared_blocks = opt.sharedblocks[idx_experimentname],
                     ).to(opt.device)
     
@@ -500,55 +518,6 @@ def _get_model_info(dataset, opt, idx_experimentname):
 
 
 
-
-def _init_best_counters(opt):
-    mindf = pd.DataFrame(
-            np.full([4, 2], np.inf),
-            # loss # nrmse 
-            columns = [opt.plotnames[0], opt.plotnames[3]],
-        )
-
-    maxdf = pd.DataFrame(
-            np.zeros([4, 2]), 
-            # ssim # psnr
-            columns = [opt.plotnames[1], opt.plotnames[2]],
-        )
-    return mindf, mindf, maxdf, maxdf
-
-def _compare_runs(
-    opt, idx_experimentname, dataset, df, 
-    metrics_min, names_min, metrics_max, names_max
-):
-    metrics_min = pd.concat(
-        [metrics_min, df],
-        keys = range(2)
-    ).drop(
-        ['psnr', 'ssim'],
-        axis = 1
-    ).groupby(
-        level = 1
-    ).min() # get min of two dfs
-
-    # cols: ssim, psnr; rows: 0 1 2 3
-    metrics_max = pd.concat(
-        [metrics_max, df],
-        keys = range(2)
-    ).drop(
-        ['loss', 'nrmse'],
-        axis = 1
-    ).groupby(
-        level = 1
-    ).max() # get max of two dfs
-
-    # get names of best experiments
-    # cols: loss, nrmse; rows: 0 1 2 3
-    names_min[metrics_min.eq(df)] = f'\
-        {dataset}_{opt.experimentnames[idx_experimentname]}'
-    # cols: ssim, psnr; rows: 0 1 2 3
-    names_max[metrics_max.eq(df)] = f'\
-        {dataset}_{opt.experimentnames[idx_experimentname]}'
-
-    return metrics_min, names_min, metrics_max, names_max
 
 def _show_best(plots, df_psnr_ssim, df_loss_nrmse, opt, dataset):
     df_psnr_ssim = df_psnr_ssim.sort_values(by = [f'{opt.datasets[0]}'])
@@ -616,8 +585,7 @@ def save_bokeh_plots(writer, opt):
 
         # for saving metrics from best runs (see opt.showbest)
         if opt.showbest:
-            metrics_min, names_min, metrics_max, names_max = _init_best_counters(opt)
-
+            pass
         # iterate through each model (i.e. N = _) in the folder
         for idx_experimentname, experimentname in enumerate(opt.experimentnames): 
 
@@ -641,13 +609,7 @@ def save_bokeh_plots(writer, opt):
                     x_data = dataset 
                 
                 if opt.showbest:
-                    # update based on current run; plot at end of iterating all runs
-                    metrics_min, names_min, metrics_max, names_max = _compare_runs(
-                        opt, idx_experimentname, dataset, 
-                        df, 
-                        metrics_min, names_min, 
-                        metrics_max, names_max
-                    )   
+                    pass
 
                 for idx_plot in range(4):
                     # Add glyphs
@@ -670,28 +632,7 @@ def save_bokeh_plots(writer, opt):
                     )
         
         if opt.showbest:
-            # rename columns
-            columns = {
-                opt.plotnames[j] : f'{opt.plotnames[j]}name'
-                for j in range(4)
-            }
-            names_max = names_max.rename(
-                columns = columns
-            )
-            names_min = names_min.rename(
-                columns = columns
-            )
-
-            # concat to send off to plot
-            maxdf = pd.concat([metrics_max, names_max], axis = 1)
-            mindf = pd.concat([metrics_min, names_min], axis = 1)
-
-            # runs might not have had all scarcities
-            maxdf = maxdf[(maxdf.T != 0).any()]
-            mindf = mindf[(mindf.T != 0).any()]
-
-            # add to plot
-            plots = _show_best(plots, maxdf, mindf, opt, dataset)
+            pass
     
     # customize and save plots    
     if opt.createplots:     

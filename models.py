@@ -8,6 +8,7 @@ from typing import List
 
 import fastmri
 from fastmri_varnet import NormUnet
+from fastmri.models.varnet import NormUnet as STLNormUnet
 from utils import Tensor_Hook
 
 
@@ -178,7 +179,7 @@ class STL_VarNet(nn.Module):
         super().__init__()
 
         self.cascades = nn.ModuleList(
-            [VarNetBlockSTL(NormUnet(chans, pools)) for _ in range(num_cascades)]
+            [VarNetBlockSTL(STLNormUnet(chans, pools)) for _ in range(num_cascades)]
         )
         
     def forward(
