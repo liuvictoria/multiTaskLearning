@@ -35,8 +35,14 @@ parser.add_argument(
     help='learning rate'
 )
 parser.add_argument(
-    '--gradaccumulation', default=2, type=int,
-    help='how many iterations per gradient accumulation'
+    '--gradaccumulation', default=1, type=int,
+    help='how many iterations per gradient accumulation; cannot be less than 1'
+)
+parser.add_argument(
+    '--gradaverage', default=0, type=int,
+    help='''if true, will average accumulated grads before optimizer.step
+    if false, gradaccumulation will occur without averaging (i.e. no hooks)
+    value does not matter if gradaccumulation is equal to 1'''
 )
 
 
@@ -64,6 +70,13 @@ parser.add_argument(
     '--network', default='varnet',
     help='type of network ie unet or varnet'
 )
+
+parser.add_argument(
+    '--shareetas', default=1, type=int,
+    help='''if true, there will be len(opt.datasets) number of etas for each unrolled block
+    if false, there will be 1 eta for each unrolled block
+    '''
+    )
 
 parser.add_argument(
     '--temp', default=2.0, type=float, 
@@ -154,6 +167,7 @@ opt = parser.parse_args()
 for structure in opt.blockstructures:
     assert structure in ['trueshare', 'mhushare', 'split'], \
            f'{structure} is not yet a supported block structure'
+assert opt.gradaccumulation > 0; 'opt.gradaccumulation must be greater than 0'
 
 
 """
@@ -168,6 +182,11 @@ for structure in opt.blockstructures:
 run_name = f"runs/{opt.experimentname}_" + \
     f"{'strat_' if opt.stratified else ''}" + \
     f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
+model_name = f"models/{opt.experimentname}_" + \
+    f"{'strat_' if opt.stratified else ''}" + \
+    f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
+if not os.path.isdir(model_name):
+    os.mkdir(model_name)
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
@@ -202,7 +221,8 @@ def main(opt):
         device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
         varnet = MTL_VarNet(
             opt.datasets,
-            opt.blockstructures
+            opt.blockstructures,
+            opt.shareetas,
             ).to(device)
 
         optimizer = torch.optim.Adam(varnet.parameters(), lr = opt.lr)
@@ -216,10 +236,16 @@ def main(opt):
             opt,
         )
         
+# write json files to models and runs directories; for future reference
 with open(
     os.path.join(run_name,'parameters.json'), 'w'
     ) as parameter_file:
    json.dump(vars(opt), parameter_file)     
+
+with open(
+    os.path.join(model_name,'parameters.json'), 'w'
+    ) as parameter_file:
+   json.dump(vars(opt), parameter_file)   
 
 main(opt)
 writer_tensorboard.flush()

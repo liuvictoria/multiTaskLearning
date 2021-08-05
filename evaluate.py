@@ -69,7 +69,6 @@ parser.add_argument(
 ############## required ##############
 parser.add_argument(
     '--blockstructures',
-    default = [],
     nargs='+',
     help='''explicit string of what each block is in MTL network;
     i.e. IYYIVVIYV
@@ -83,6 +82,15 @@ parser.add_argument(
     ''',
     required = True,
 )
+
+############## required ##############
+parser.add_argument(
+    '--shareetas', type=int, nargs = '+',
+    help='''for each --experimentnames, did we have one or more etas?
+    1 for one eta; 0 for more than one etas
+    ''',
+    required = True,
+    )
 
 ############## required ##############
 parser.add_argument(
@@ -235,7 +243,7 @@ def _initialize_plots(opt):
 
     plots = [
         bokeh.plotting.figure(
-            width = 700,
+            width = 920,
             height = 340,
             x_axis_label = x_axis_label,
             y_axis_label = opt.plotnames[i],
@@ -333,13 +341,6 @@ def df_single_contrast_all_models(
     )
     if summary_file.is_file():
         print (    f'  evaluation {summary_file} has been run before and will be used for current plot')
-        print (pd.read_csv(
-            summary_file
-            ).drop(
-            'Unnamed: 0', axis = 1
-            ).sort_values(
-                by=[opt.datasets[0]]
-        ))
         return pd.read_csv(
             summary_file
             ).drop(
@@ -453,7 +454,7 @@ def _get_model_filedir(dataset, opt, idx_experimentname):
             model_filedir = os.path.join(
                 opt.modeldir,
                 f"{opt.experimentnames[idx_experimentname]}_" + \
-                f"{'strat_' if opt.stratified[idx_experimentname] else ''}" + \
+                # f"{'strat_' if opt.stratified[idx_experimentname] else ''}" + \
                 f"{opt.network[idx_experimentname]}" + \
                 f"{opt.blockstructures[idx_experimentname]}_" +\
                 f"{'_'.join(opt.datasets)}"
@@ -491,13 +492,15 @@ def _get_model_info(dataset, opt, idx_experimentname):
                 ).to(opt.device)
                 
     elif 'MTL' in opt.experimentnames[idx_experimentname]:
+        ### remember to change the inputs manually
         if opt.backcompat[idx_experimentname]:
             with torch.no_grad():
                 the_model = MTL_VarNet_backcompat(
                     datasets = opt.datasets,
-                    num_cascades = opt.numblocks[idx_experimentname],
-                    begin_blocks = opt.beginblocks[idx_experimentname],
-                    shared_blocks = opt.sharedblocks[idx_experimentname],
+                    blockstructures = interpret_blockstructures(
+                        opt.blockstructures[idx_experimentname]
+                        ),
+                    share_etas = opt.shareetas[idx_experimentname],
                     ).to(opt.device)
     
         else:
@@ -507,6 +510,7 @@ def _get_model_info(dataset, opt, idx_experimentname):
                     blockstructures = interpret_blockstructures(
                         opt.blockstructures[idx_experimentname]
                         ),
+                    share_etas = opt.shareetas[idx_experimentname],
                     ).to(opt.device)
     
     else:

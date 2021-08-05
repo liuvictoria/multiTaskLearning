@@ -2,6 +2,8 @@ import os
 import copy
 import numpy as np
 import torch
+import torch.nn as nn
+
 
 from fastmri.data import transforms
 
@@ -167,6 +169,7 @@ def _get_naive_weights(train_ratios, opt):
     }
     return naive_weights
 
+           
 
 """
 =========== Universal Multi-task Trainer ===========
@@ -231,35 +234,23 @@ def multi_task_trainer(
 
         # train the data
         multi_task_model.train()
-
         train_dataset = iter(train_loader)
+
+        optimizer.zero_grad() # grad accumulation
 
         for kspace, mask, esp, im_fs, contrast in train_dataset:
             contrast = contrast[0] # torch dataset loader returns as tuple
             kspace, mask = kspace.to(device), mask.to(device)
             esp, im_fs = esp.to(device), im_fs.to(device)
 
-            
-
             # grad accumulation 
             iteration += 1
-            print (f'iteration {iteration}')
             contrast_batches[opt.datasets.index(contrast)] += 1
 
-            optimizer.zero_grad()
-            # create hooks before last batch in accumulation
-            if sum(contrast_batches) == opt.gradaccumulation:
-                # forward
-                _, im_us, logsigma = multi_task_model(
-                    kspace, mask, esp, contrast,
-                    contrast_batches = contrast_batches, create_hooks = True,
-                    )
-            else:
-                # forward
-                _, im_us, logsigma = multi_task_model(
-                    kspace, mask, esp, contrast,
-                    contrast_batches = contrast_batches, create_hooks = False,
-                    )
+            # forward
+            _, im_us, logsigma = multi_task_model(
+                kspace, mask, esp, contrast,
+                )
 
             # crop so im_us has same size as im_fs
             im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
@@ -275,12 +266,18 @@ def multi_task_trainer(
                         logsigma[idx_contrast] / 2
                 # for plotting purposes
                 weights[contrast] = logsigma[idx_contrast]
+            
+            # grad accumulation
+            if opt.gradaverage:
+                loss /= opt.gradaccumulation
 
             loss.backward()
-            
+
             # step optimizer once we've reached the right no. batches
-            if sum(contrast_batches) == opt.gradaccumulation:      
+            if sum(contrast_batches) == opt.gradaccumulation:
                 optimizer.step()
+                optimizer.zero_grad()
+                
                 # reset contrast batches
                 contrast_batches = [0 for _ in range(len(opt.datasets))] 
 
@@ -306,8 +303,7 @@ def multi_task_trainer(
 
                 _, im_us, logsigma = multi_task_model(
                     kspace, mask, esp, contrast,
-                    contrast_batches = [1],
-                    create_hooks = False,
+
                     ) # forward pass
                 # crop so im_us has same size as im_fs
                 im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
@@ -373,4 +369,4 @@ def multi_task_trainer(
         # write to tensorboard
         ###opt###
         if opt.tensorboard:
-            write_tensorboard(writer, cost, iteration, multi_task_model, ratio, opt, weights)
+            write_tensorboard(writer, cost, iteration, epoch, multi_task_model, ratio, opt, weights)

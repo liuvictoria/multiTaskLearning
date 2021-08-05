@@ -6,6 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import fastmri_unet
+
 from fastmri.data import transforms
 
 import sigpy as sp
@@ -80,7 +82,7 @@ def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):
 
 
 """
-=========== Hook ============= 
+=========== Hook (RETIRED) ============= 
     hooks for gradient accumulation
     involved with dividing gradient of
     split / shared layers properly
@@ -94,16 +96,18 @@ class Module_Hook():
         ):
         
         assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
-        accumulate_by = float(accumulated_by)
-
-        self.accumulated_by = 1
-        self.hook = module.register_full_backward_hook(self.hook_fn)
+        if accumulated_by == 0:
+            accumulated_by = 1
+        accumulated_by = float(accumulated_by)
+        self.accumulated_by = accumulated_by
         self.name = name
+
+        self.hook = module.register_full_backward_hook(self.hook_fn)
+        
 
     def hook_fn(self, module, input, output):
         # print (f' using module {self.name} hook divided by {self.accumulated_by}')
         if type(input[0]) == torch.Tensor:
-            # print(type(input[0]))
             return tuple(tensor / self.accumulated_by for tensor in input)
   
 
@@ -118,8 +122,10 @@ class Tensor_Hook():
         name: str = None, 
         accumulated_by: int = None,
         ):
-        print (f'creating hook {name}')
         assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
+        if accumulated_by == 0:
+            accumulated_by = 1
+
         accumulated_by = float(accumulated_by)
         self.accumulated_by = 1
         self.hook = tensor.register_hook(self.hook_fn)
@@ -131,8 +137,82 @@ class Tensor_Hook():
         return tensor / self.accumulated_by
 
     def close(self):
-        print(f'removed hook {self.name}')
         self.hook.remove()
+
+def configure_hooks(model, contrast_batches):
+    '''
+    full backward hooks for gradient accumulation
+    creates hooks at all levels:
+        MTL_VarNet (uncert)
+        VarNetBlockMTL (etas)
+        Unet levels (shared encoder vs split/shared decoder)
+    '''
+    # register hooks for accumulated gradient
+    hooks = []
+   
+    # uncertainty at MTL_VarNet level
+    hooks.extend([
+        Tensor_Hook(
+            logsigma, 
+            name = f'uncert hook {idx_contrast}',
+            accumulated_by = contrast_batches[idx_contrast]
+            )
+        for idx_contrast, logsigma in enumerate(model.logsigmas)
+    ])
+    
+    # etas
+    for idx_block, block in enumerate(model.allblocks):  
+        hooks.extend([
+            Tensor_Hook(
+                eta, 
+                name = f'eta_{idx_block}', 
+                accumulated_by = sum(contrast_batches) if model.share_etas else contrast_batches[idx_contrast], 
+                )
+            for idx_contrast, eta in enumerate(block.etas)
+        ])
+    
+    # encoder / decoders
+
+    for name, module in model.named_modules():
+        
+        # initialize create_hook bool
+        create_hook = False
+
+        if type(module) == fastmri_unet.ConvBlock or type(module) == fastmri_unet.TransposeConvBlock:
+            create_hook = True
+
+        if create_hook:
+            if 'logsigmas' in name or 'etas' in name:
+                # we've alredy done these hooks using tensorhooks. Don't go to ModuleHook
+                continue
+
+            elif 'splitblock' in name:
+                # '.splitblock_{int_contrast}.'
+                int_contrast = int(name.split('splitblock_')[1].split('.')[0])
+                accumulated_by = contrast_batches[int_contrast]
+                
+            elif 'splitdecoder' in name:
+                # '_{int_contrast}_splitdecoder.'
+                int_contrast = int(name.split('_splitdecoder')[0].split('_')[-1])
+                accumulated_by = contrast_batches[int_contrast]
+
+            elif 'shared' in name:
+                accumulated_by = sum(contrast_batches)
+        
+            else:
+                raise ValueError (f'unrecognized name {name}')
+
+            hooks.extend([
+                Module_Hook(
+                    module,
+                    f'{name}',
+                    accumulated_by = accumulated_by,
+                )
+            ])    
+        
+
+
+    return hooks    
 
 """
 =========== Misc ============= 
@@ -203,12 +283,11 @@ def plot_quadrant(im_fs: torch.Tensor, im_us: torch.Tensor):
 
 
 
-def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
+def write_tensorboard(writer, cost, iteration, epoch, model, ratio, opt, weights = None):
     '''
     weights = None implies STL; weights should be dict of weights
-    note that epoch may also represent iteration; 
-    since it's just x-axis, not changing the variable name
     '''
+    
     if epoch == 0:
         writer.add_text(
             'parameters', 
@@ -218,19 +297,17 @@ def write_tensorboard(writer, cost, epoch, model, ratio, opt, weights = None):
     if epoch >= 2:
         if len(opt.datasets) == 1:
             write_tensorboard_one_contrasts(
-                writer, cost, epoch, ratio, opt
+                writer, cost, iteration, ratio, opt
             )
         else:
             write_tensorboard_two_contrasts(
-                writer, cost, epoch, ratio, opt, weights = weights
+                writer, cost, iteration, ratio, opt, weights = weights
             )
 
 
-def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
+def write_tensorboard_two_contrasts(writer, cost, iteration, ratio, opt, weights):
     # write to tensorboard ###opt###
     contrast_1, contrast_2 = opt.datasets
-    # for display purposes
-    epoch += 1 
 
     writer.add_scalars(
         f'{ratio}/l1', {
@@ -239,7 +316,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{contrast_2}' : cost[contrast_2][0],
             f'val/{contrast_2}' : cost[contrast_2][4],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -249,7 +326,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{contrast_2}' : cost[contrast_2][1],
             f'val/{contrast_2}' : cost[contrast_2][5],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -259,7 +336,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{contrast_2}' : cost[contrast_2][2],
             f'val/{contrast_2}' : cost[contrast_2][6],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -269,7 +346,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{contrast_2}' : cost[contrast_2][3],
             f'val/{contrast_2}' : cost[contrast_2][7],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -277,7 +354,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{ratio}' : cost['overall'][0],
             f'val/{ratio}' : cost['overall'][4],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -285,7 +362,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{ratio}' : cost['overall'][1],
             f'val/{ratio}' : cost['overall'][5],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -293,7 +370,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{ratio}' : cost['overall'][2],
             f'val/{ratio}' : cost['overall'][6],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -301,7 +378,7 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
             f'train/{ratio}' : cost['overall'][3],
             f'val/{ratio}' : cost['overall'][7],
         }, 
-        epoch
+        iteration
     )
 
     if weights is not None:
@@ -310,11 +387,11 @@ def write_tensorboard_two_contrasts(writer, cost, epoch, ratio, opt, weights):
                 f'{contrast_1}' : weights[contrast_1],
                 f'{contrast_2}' : weights[contrast_2],
             }, 
-            epoch
+            iteration
         )
 
     
-def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
+def write_tensorboard_one_contrasts(writer, cost, iteration, ratio, opt):
     #write to tensorboard ###opt###
     contrast_1 = opt.datasets[0]
     epoch += 1
@@ -324,7 +401,7 @@ def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
             f'train/{contrast_1}' : cost[contrast_1][0],
             f'val/{contrast_1}' : cost[contrast_1][4],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -332,7 +409,7 @@ def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
             f'train/{contrast_1}' : cost[contrast_1][1],
             f'val/{contrast_1}' : cost[contrast_1][5],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -340,7 +417,7 @@ def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
             f'train/{contrast_1}' : cost[contrast_1][2],
             f'val/{contrast_1}' : cost[contrast_1][6],
         }, 
-        epoch
+        iteration
     )
 
     writer.add_scalars(
@@ -348,7 +425,7 @@ def write_tensorboard_one_contrasts(writer, cost, epoch, ratio, opt):
             f'train/{contrast_1}' : cost[contrast_1][3],
             f'val/{contrast_1}' : cost[contrast_1][7],
         }, 
-        epoch
+        iteration
     )
 
 

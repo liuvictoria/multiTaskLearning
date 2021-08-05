@@ -8,7 +8,6 @@ from torch import nn
 from torch.nn import functional as F
 
 from typing import List
-from utils import Module_Hook
 
 
 class MHUnet(nn.Module):
@@ -47,13 +46,24 @@ class MHUnet(nn.Module):
         self.decoder_heads = decoder_heads
 
         # down sample layers
-        self.down_sample_layers = nn.ModuleList([ConvBlock(in_chans, chans, drop_prob)])
+        self.down_sample_layers = nn.ModuleList() 
+        self.down_sample_layers.add_module(
+            f'sharedencoder_0',
+            ConvBlock(in_chans, chans, drop_prob)
+            )
         ch = chans
-        for _ in range(num_pool_layers - 1):
-            self.down_sample_layers.append(ConvBlock(ch, ch * 2, drop_prob))
+        for i in range(1, num_pool_layers):
+            self.down_sample_layers.add_module(
+                f'sharedencoder_{i}',
+                ConvBlock(ch, ch * 2, drop_prob)
+                )
             ch *= 2
         # before going to downsampling
-        self.conv = ConvBlock(ch, ch * 2, drop_prob)
+        self.conv = nn.ModuleList()
+        self.conv.add_module(
+            f'sharedencoder_0',
+            ConvBlock(ch, ch * 2, drop_prob)
+        )
 
         # recall no. current channels after downsampling; constant
         downsampling_ch = ch
@@ -64,106 +74,51 @@ class MHUnet(nn.Module):
         # post-skip connection concat conv layers; contrast no. of modules
         self.up_convs = nn.ModuleList()
 
+        hook_type = 'shareddecoder' if decoder_heads == 1 else 'splitdecoder'
         for idx_head in range(decoder_heads):
             # get no. channels from downsampling
             ch = downsampling_ch
             self.up_transpose_convs.append(nn.ModuleList())
             self.up_convs.append(nn.ModuleList())
         
-            for _ in range(num_pool_layers - 1):
-                self.up_transpose_convs[idx_head].append(TransposeConvBlock(ch * 2, ch))
-                self.up_convs[idx_head].append(ConvBlock(ch * 2, ch, drop_prob))
+            for i in range(num_pool_layers - 1):
+                self.up_transpose_convs[idx_head].add_module(
+                    f'contrast_{idx_head}_{hook_type}_{i}',
+                    TransposeConvBlock(ch * 2, ch)
+                    )
+                self.up_convs[idx_head].add_module(
+                    f'contrast_{idx_head}_{hook_type}_{i}',
+                    ConvBlock(ch * 2, ch, drop_prob)
+                    )
                 ch //= 2
 
-            self.up_transpose_convs[idx_head].append(TransposeConvBlock(ch * 2, ch))
-            self.up_convs[idx_head].append(
+            self.up_transpose_convs[idx_head].add_module(
+                f'contrast_{idx_head}_{hook_type}_{num_pool_layers}',
+                TransposeConvBlock(ch * 2, ch)
+                )
+            self.up_convs[idx_head].add_module(
+                f'contrast_{idx_head}_{hook_type}_{num_pool_layers}',
                 nn.Sequential(
                     ConvBlock(ch * 2, ch, drop_prob),
                     nn.Conv2d(ch, self.out_chans, kernel_size=1, stride=1),
                 )
             )
 
-        # initialize categories of hooks (shared, split)
-        self.shared_hooks = []
-        self.split_hooks = []
 
-
-    def configure_hooks(self, contrast_batches):
-        '''
-        full backward hooks for gradient accumulation
-        '''
-        # register hooks for accumulated gradient
-        # start with shared
-        self.shared_hooks.extend([
-            Module_Hook(shared_module, name = 'downsamplelayers', accumulated_by = sum(contrast_batches))
-            for shared_module in self.down_sample_layers
-        ])
-        self.shared_hooks.extend([
-            Module_Hook(self.conv, name = 'self.conv', accumulated_by = sum(contrast_batches))
-        ])
-        
-        # determine if decoder head is shared or split  
-        if self.decoder_heads == 1:
-            # shared
-            self.split_hooks.extend([
-                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = sum(contrast_batches))
-                for decoder_head in self.up_transpose_convs
-                for split_module in decoder_head
-            ])
-            self.split_hooks.extend([
-                Module_Hook(split_module, name = f'{self.decoder_heads}self.up_convs', accumulated_by = sum(contrast_batches))
-                for decoder_head in self.up_convs
-                for split_module in decoder_head
-            ])
-        else:
-            # split
-            self.split_hooks.extend([
-                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = contrast_batches[idx_head])
-                for idx_head, decoder_head in enumerate(self.up_transpose_convs)
-                for split_module in decoder_head
-            ])
-            self.split_hooks.extend([
-                Module_Hook(split_module, name = f'{self.decoder_heads}uptransposelayers', accumulated_by = contrast_batches[idx_head])
-                for idx_head, decoder_head in enumerate(self.up_convs)
-                for split_module in decoder_head
-            ])        
 
     def forward(
         self, 
         image: torch.Tensor,
         int_contrast: int,
-        # for hooks: do positional, not keyword, arguments
-        contrast_batches: List[int],
-        create_hooks: bool,
         ) -> torch.Tensor:
         """
         Args:
             image: Input 4D tensor of shape `(N, in_chans, H, W)`.
             int_contrast: i.e. 0 for div_coronal_pd_fs, 1 for div_coronal_pd
-            contrast_batches: used for gradient acc; [no. contrast1, no. contrast2]
-            create_hooks: if this is the last gradient acc before optimizer.step
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
-        
-        ################################### 
-        # deal with hook stuff (shared encoder / split decoder)
-        if sum(contrast_batches) == 1:
-            # remove all previous hooks at first batch of next grad acc.
-            for shared_hook in self.shared_hooks:
-                shared_hook.close()
-            for split_hook in self.split_hooks:
-                split_hook.close()
-            self.shared_hooks = []
-            self.split_hooks = []
 
-        # if true, we are in the last batch before loss.backward() for grad. acc.
-        if create_hooks:
-            self.configure_hooks(contrast_batches)
-        else:
-            assert len(self.shared_hooks) == 0, 'did not clear unet shared hooks for next grad acc.'
-            assert len(self.split_hooks) == 0, 'did not clear unet split hooks for next grad acc.'
-        ###################################   
         # figure out what initialized architecture was, so as to forward pass
         if self.decoder_heads == 1:
             int_contrast = 0
@@ -180,7 +135,8 @@ class MHUnet(nn.Module):
             
             output = F.avg_pool2d(output, kernel_size=2, stride=2, padding=0)
 
-        output = self.conv(output)
+        for layer in self.conv:
+            output = layer(output)
 
         # apply up-sampling layers
         for idx_upsample, (transpose_conv, conv) in enumerate(zip(
@@ -278,6 +234,7 @@ class TransposeConvBlock(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H*2, W*2)`.
         """
+        image = image.clone()
         return self.layers(image)
 
 
