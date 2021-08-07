@@ -186,7 +186,7 @@ model_name = f"models/{opt.experimentname}_" + \
     f"{'strat_' if opt.stratified else ''}" + \
     f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
 if not os.path.isdir(model_name):
-    os.mkdir(model_name)
+    os.makedirs(model_name)
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
