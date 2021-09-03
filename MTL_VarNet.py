@@ -62,6 +62,7 @@ parser.add_argument(
     ]
     trueshare block shares encoder and decoder;
     mhushare block shares encoder but not decoder;
+    attenshare block has global shared unet, atten at all levels
     split does not share anything
     '''
 )
@@ -73,8 +74,8 @@ parser.add_argument(
 
 parser.add_argument(
     '--shareetas', default=1, type=int,
-    help='''if true, there will be len(opt.datasets) number of etas for each unrolled block
-    if false, there will be 1 eta for each unrolled block
+    help='''if false, there will be len(opt.datasets) number of etas for each unrolled block
+    if true, there will be 1 eta for each unrolled block
     '''
     )
 

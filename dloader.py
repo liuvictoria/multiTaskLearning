@@ -232,7 +232,7 @@ class BalancedSampler(Sampler):
 def genDataLoader(
     roots, scarcities,
     center_fractions, accelerations,
-    shuffle, num_workers, seed=123,
+    shuffle, num_workers, seed=333,
     stratified = False, method = 'upsample',
     use_same_mask = False,
 ):
