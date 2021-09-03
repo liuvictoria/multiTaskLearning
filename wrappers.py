@@ -33,6 +33,10 @@ def single_task_trainer(
     ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
     best_val_loss = np.infty
 
+    # grad accumulation
+    iteration = 0
+    batch_count = 0
+
     for epoch in range(opt.epochs):
         # contains info for single epoch
         cost = {
@@ -43,22 +47,38 @@ def single_task_trainer(
 
         # train the data
         single_task_model.train()
-
         train_dataset = iter(train_loader)
+
+        # grad accumulation
+        optimizer.zero_grad() 
 
         for kspace, mask, esp, im_fs, contrast in train_dataset:
             contrast = contrast[0] # torch dataset loader returns as tuple
             kspace, mask = kspace.to(device), mask.to(device)
             esp, im_fs = esp.to(device), im_fs.to(device)
 
-            optimizer.zero_grad()
+            # grad accumulation 
+            iteration += 1
+            batch_count += 1
 
             _, im_us = single_task_model(kspace, mask, esp) # forward pass
             # crop so im_us has same size as im_fs
             im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
             loss = criterion(im_fs, im_us)
+
+            # grad accumulation
+            if opt.gradaverage:
+                loss /= opt.gradaccumulation
+
             loss.backward()
-            optimizer.step()
+
+            # step optimizer once we've reached the right no. batches
+            if batch_count == opt.gradaccumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+                
+                # reset contrast batches
+                batch_count = 0 
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now
@@ -143,7 +163,7 @@ def single_task_trainer(
         # write to tensorboard
         ###opt###
         if opt.tensorboard:
-            write_tensorboard(writer, cost, epoch, single_task_model, ratio, opt)
+            write_tensorboard(writer, cost, iteration, epoch, single_task_model, ratio, opt)
 
 
 
@@ -202,7 +222,7 @@ def multi_task_trainer(
 
     # grad accumulation
     iteration = 0
-    contrast_batches = [0 for _ in range(len(opt.datasets))] 
+    batch_count = 0 
 
     for epoch in range(opt.epochs):
 
@@ -215,15 +235,17 @@ def multi_task_trainer(
 
             # get dwa weights
             if epoch > 1:
-                w_0 = cost_prev[opt.datasets[0]][0] / cost_prevprev[opt.datasets[0]][0]
-                w_1 = cost_prev[opt.datasets[1]][0] / cost_prevprev[opt.datasets[1]][0]
+                w = []
+                for dataset in opt.datasets:
+                    w.append(cost_prev[dataset][0] / cost_prevprev[dataset][0])
 
-                weights[opt.datasets[0]] = contrast_count * np.exp(w_0 / opt.temp) / (
-                    np.exp(w_0 / opt.temp) + np.exp(w_1 / opt.temp)
-                    )
-                weights[opt.datasets[1]] = contrast_count * np.exp(w_1 / opt.temp) / (
-                    np.exp(w_0 / opt.temp) + np.exp(w_1 / opt.temp)
-                    )              
+                softmax_sum = np.sum([
+                    np.exp(w[idx_dataset] / opt.temp) 
+                    for idx_dataset in range(len(opt.datasets))
+                ])
+                for idx_dataset, dataset in enumerate(opt.datasets):
+                    weights[dataset] = contrast_count * np.exp(w[idx_dataset] / opt.temp) / softmax_sum
+    
 
         # contains info for current epoch:
         cost = {
@@ -236,7 +258,8 @@ def multi_task_trainer(
         multi_task_model.train()
         train_dataset = iter(train_loader)
 
-        optimizer.zero_grad() # grad accumulation
+        # grad accumulation
+        optimizer.zero_grad() 
 
         for kspace, mask, esp, im_fs, contrast in train_dataset:
             contrast = contrast[0] # torch dataset loader returns as tuple
@@ -245,7 +268,7 @@ def multi_task_trainer(
 
             # grad accumulation 
             iteration += 1
-            contrast_batches[opt.datasets.index(contrast)] += 1
+            batch_count += 1
 
             # forward
             _, im_us, logsigma = multi_task_model(
@@ -274,12 +297,12 @@ def multi_task_trainer(
             loss.backward()
 
             # step optimizer once we've reached the right no. batches
-            if sum(contrast_batches) == opt.gradaccumulation:
+            if batch_count == opt.gradaccumulation:
                 optimizer.step()
                 optimizer.zero_grad()
                 
                 # reset contrast batches
-                contrast_batches = [0 for _ in range(len(opt.datasets))] 
+                batch_count = 0 
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now

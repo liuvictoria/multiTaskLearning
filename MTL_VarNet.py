@@ -51,14 +51,14 @@ parser.add_argument(
 parser.add_argument(
     '--blockstructures', nargs='+',
     default=[
-        'trueshare', 'mhushare', 'trueshare', 'mhushare',
-        'trueshare', 'split', 'trueshare', 'split',
-        'trueshare', 'split', 'trueshare', 'split',
+        'trueshare', 'mhushare', 'attenshare', 'mhushare',
+        'split', 'attenshare', 'split', 'split',
+        'mhushare', 'mhushare', 'attenshare', 'attenshare',
     ],
     help='''explicit list of what each block will be;
     defines total number of blocks;
     possible options = [
-        trueshare, mhushare, split
+        trueshare, mhushare, attenshare, split
     ]
     trueshare block shares encoder and decoder;
     mhushare block shares encoder but not decoder;
@@ -169,6 +169,7 @@ for structure in opt.blockstructures:
            f'unet structure is not yet a supported block structure'
 assert opt.gradaccumulation > 0; 'opt.gradaccumulation must be greater than 0'
 
+assert opt.weighting in ['naive', 'uncert', 'dwa'], f'weighting method not yet supported'
 
 """
 =========== run/model name ============

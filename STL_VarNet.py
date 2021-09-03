@@ -40,6 +40,16 @@ parser.add_argument(
     '--lr', default=0.0002, type=float,
     help='learning rate'
 )
+parser.add_argument(
+    '--gradaccumulation', default=1, type=int,
+    help='how many iterations per gradient accumulation; cannot be less than 1'
+)
+parser.add_argument(
+    '--gradaverage', default=0, type=int,
+    help='''if true, will average accumulated grads before optimizer.step
+    if false, gradaccumulation will occur without averaging (i.e. no hooks)
+    value does not matter if gradaccumulation is equal to 1'''
+)
 
 
 # model training
@@ -50,6 +60,13 @@ parser.add_argument(
 parser.add_argument(
     '--network', default='varnet',
     help='type of network ie unet or varnet'
+)
+parser.add_argument(
+    '--weightsdir', default=None,
+    help='''for transfer learning, give directory for loading weights;
+    i.e. '/mnt/dense/vliu/summer_runs_models/models/STL_baselines/STL_nojoint_varnet_div_coronal_pd/N=481_l1.pt'
+    default to None because we're not usually doing transfer
+    '''
 )
 parser.add_argument(
     '--device', default='cuda:2',
@@ -170,6 +187,14 @@ def main(opt):
         # other inputs to STL wrapper
         device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
         varnet = STL_VarNet(opt.numblocks).to(device)
+
+        # load weights if doing transfer learning
+        if opt.weightsdir:
+            varnet.load_state_dict(torch.load(
+                opt.weightsdir, 
+                map_location = device,
+                )
+            )
 
         optimizer = torch.optim.Adam(varnet.parameters(),lr = opt.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)

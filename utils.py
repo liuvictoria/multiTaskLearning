@@ -396,7 +396,6 @@ def write_tensorboard_two_contrasts(writer, cost, iteration, ratio, opt, weights
 def write_tensorboard_one_contrasts(writer, cost, iteration, ratio, opt):
     #write to tensorboard ###opt###
     contrast_1 = opt.datasets[0]
-    epoch += 1
         
     writer.add_scalars(
         f'{ratio}/l1', {
