@@ -223,6 +223,7 @@ def label_blockstructures(blockstructures):
         'trueshare' : 'I',
         'mhushare' : 'Y',
         'split' : 'V',
+        'attenshare' : 'W',
     }
     labels = []
     for blockstructure in blockstructures:
@@ -234,7 +235,8 @@ def interpret_blockstructures(blockstructures):
         'I' : 'trueshare',
         'Y' : 'mhushare',
         'V' : 'split',
-    }
+        'W' : 'attenshare',
+     }
     labels = []
     for blockstructure in blockstructures:
         labels.append(conversion[blockstructure])

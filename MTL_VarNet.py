@@ -165,8 +165,8 @@ opt = parser.parse_args()
 
 # validation of user inputs
 for structure in opt.blockstructures:
-    assert structure in ['trueshare', 'mhushare', 'split'], \
-           f'{structure} is not yet a supported block structure'
+    assert structure in ['trueshare', 'mhushare', 'split', 'attenshare'], \
+           f'unet structure is not yet a supported block structure'
 assert opt.gradaccumulation > 0; 'opt.gradaccumulation must be greater than 0'
 
 

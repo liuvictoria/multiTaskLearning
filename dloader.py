@@ -24,7 +24,8 @@ class MRIDataset(Dataset):
 
     def __init__(
         self, roots, scarcities, seed,
-        center_fractions, accelerations
+        center_fractions, accelerations,
+        use_same_mask = False,
     ):
         self.rng = np.random.default_rng(seed)
         # where dataset references are stored
@@ -58,6 +59,7 @@ class MRIDataset(Dataset):
         self.mask_func = subsample.EquispacedMaskFunc(
             center_fractions=center_fractions, accelerations=accelerations
         )
+        self.use_same_mask = use_same_mask
     
 
     def subset_sample(self, Files, scarcity):
@@ -113,7 +115,12 @@ class MRIDataset(Dataset):
         im_coil = sp.ifft(kspace, axes=[1, 2])
         im_true = np.sum(im_coil * np.conj(esp_maps), axis=0)
 
-        mask = self.mask_func(list(im_true.shape) + [1])[..., 0]
+        if self.use_same_mask:
+            # for evaluation only
+            mask = self.mask_func(list(im_true.shape) + [1], seed = 0)[..., 0]
+        else:
+            # different masks for training; data augmentation
+            mask = self.mask_func(list(im_true.shape) + [1])[..., 0]
         mask = np.expand_dims(mask, axis=0)
         masked_kspace = kspace * mask  # undersampled kspace
         mask = np.expand_dims(mask, axis=-1)
@@ -226,7 +233,8 @@ def genDataLoader(
     roots, scarcities,
     center_fractions, accelerations,
     shuffle, num_workers, seed=123,
-    stratified = False, method = 'upsample'
+    stratified = False, method = 'upsample',
+    use_same_mask = False,
 ):
     '''
     if shuffle = True, but stratified = True, 
@@ -242,6 +250,7 @@ def genDataLoader(
     dset = MRIDataset(
         roots = roots, scarcities = scarcities, seed = seed, 
         center_fractions = center_fractions, accelerations = accelerations,
+        use_same_mask = use_same_mask,
         )
     # only for beginning of training
     if stratified:
@@ -262,7 +271,7 @@ def genDataLoader(
         return (
             DataLoader(
                 dset, batch_size=1, 
-                shuffle = shuffle, num_workers = num_workers
+                shuffle = shuffle, num_workers = num_workers,
                 ), 
             dset.ratios, 
             dset.slices

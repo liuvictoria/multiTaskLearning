@@ -209,7 +209,7 @@ class MTL_VarNet(nn.Module):
 
         self.trueshare = nn.ModuleList([
             VarNetBlockMTL(
-                NormUnet(chans, pools, which_unet = 'Unet',), 
+                NormUnet(chans, pools, which_unet = 'trueshare',), 
                 datasets,
                 share_etas = share_etas,
                 ) for _ in range(block_counts['trueshare'])
@@ -218,10 +218,18 @@ class MTL_VarNet(nn.Module):
 
         self.mhushare = nn.ModuleList([
             VarNetBlockMTL(
-                NormUnet(chans, pools, which_unet = 'MHUnet', contrast_count = len(datasets),), 
+                NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
                 datasets,
                 share_etas = share_etas,
                 ) for _ in range(block_counts['mhushare'])
+        ])
+
+        self.attenshare = nn.ModuleList([
+            VarNetBlockMTL(
+                NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
+                datasets,
+                share_etas = share_etas,
+                ) for _ in range(block_counts['attenshare'])
         ])
 
         self.split_contrasts = nn.ModuleList()
@@ -230,7 +238,7 @@ class MTL_VarNet(nn.Module):
                 f'splitblock_{idx_contrast}',
                 nn.ModuleList([
                 VarNetBlockMTL(
-                    NormUnet(chans, pools, which_unet = 'Unet',), 
+                    NormUnet(chans, pools, which_unet = 'split',), 
                     datasets,
                     share_etas = share_etas,
                     ) for _ in range(block_counts['split'])
@@ -262,7 +270,7 @@ class MTL_VarNet(nn.Module):
             raise ValueError(f'{contrast} is not in self.datasets')
 
         # make counter for each type of block
-        counter = [0 for _ in range(3)] # currently three types of blocks
+        counter = [0 for _ in range(4)] # currently four types of blocks
 
         # go thru the blocks (usually 12)
         for idx_structure, structure in enumerate(self.blockstructures):
@@ -273,6 +281,7 @@ class MTL_VarNet(nn.Module):
                     int_contrast = int_contrast,
                 )
                 counter[0] += 1
+
             elif structure == 'mhushare':
                 kspace_pred = self.mhushare[counter[1]](
                     kspace_pred, masked_kspace, mask, esp_maps, 
@@ -280,9 +289,16 @@ class MTL_VarNet(nn.Module):
                 )
                 counter[1] += 1
 
+            elif structure == 'attenshare':
+                kspace_pred = self.attenshare[counter[2]](
+                    kspace_pred, masked_kspace, mask, esp_maps, 
+                    int_contrast = int_contrast,
+                )
+                counter[2] += 1
+
             elif structure == 'split':
                 block = f'splitblock_{int_contrast}'
-                kspace_pred = getattr(self.split_contrasts, block)[counter[2]](
+                kspace_pred = getattr(self.split_contrasts, block)[counter[3]](
                         kspace_pred, masked_kspace, mask, esp_maps, 
                         int_contrast = int_contrast,
                     )

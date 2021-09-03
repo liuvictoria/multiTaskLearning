@@ -18,7 +18,7 @@ from dloader import genDataLoader
 import pandas as pd
 import bokeh.plotting
 # colors for plots
-from bokeh.palettes import Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8
+from bokeh.palettes import Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8, Category10_10
 
 from fastmri.data import transforms
 from utils import criterion, metrics
@@ -108,7 +108,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--modeldir', default='/mnt/dense/vliu/models/',
+    '--modeldir', default='/../../mnt/dense/vliu/models/',
     help='models root directory; where are pretrained models are'
 )
 ############## required ##############
@@ -172,8 +172,8 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--colors', default = ['Set2_8'], nargs = '+',
-    help='''Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8
+    '--colors', default = ['Category10_10'], nargs = '+',
+    help='''Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8, Category10_10
     https://docs.bokeh.org/en/latest/docs/reference/palettes.html#bokeh-palette
     OR
     give a list of custom colors'''
@@ -201,8 +201,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--bestruncolor', default = '#009E73',
-    help='color for best run; only matters if --showbest is true',
+    '--bestdir', default='plots/best',
+    help='''directory of where best run summary plots are; csv's must be manually created'''
+)
+
+parser.add_argument(
+    '--bestruncolor', default = '#FF6C0C',
+    help='color for best run; only matters if --showbest is true; default Caltech orange',
 )
 
 parser.add_argument(
@@ -234,7 +239,14 @@ opt = parser.parse_args()
 
 # change opt.colors from string to variable of color palette
 if len(opt.colors) == 1:
-    exec("%s = %s" % ('opt.colors', opt.colors[0]))
+    # best color is in orange so don't have any runs plotted in orange.
+    # this is for final poster presentation, so remove this if it's confusing
+    if opt.colors[0] == 'Category10_10':
+        exec("%s = %s" % ('opt.colors', opt.colors[0]))
+        opt.colors = list(opt.colors)
+        del opt.colors[1]
+    else:
+        exec("%s = %s" % ('opt.colors', opt.colors[0]))
 
         
 # preliminary plot initialization / colors
@@ -243,8 +255,8 @@ def _initialize_plots(opt):
 
     plots = [
         bokeh.plotting.figure(
-            width = 920,
-            height = 340,
+            width = 900,
+            height = 350,
             x_axis_label = x_axis_label,
             y_axis_label = opt.plotnames[i],
             tooltips=[
@@ -257,73 +269,117 @@ def _initialize_plots(opt):
     ]
 
     if opt.showbaselines:
-        # name paths
-        #scarce
-        scarce_path = Path(os.path.join(
-            opt.modeldir, 
-            f"STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
-            f'summary_{opt.datasets[0]}.csv',
-        ))
+        plots = _plot_baselines(plots, opt)
 
-        # abundant
-        abundant_path = Path(os.path.join(
-            opt.modeldir,
-            f'STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
-            f'summary_{opt.datasets[1]}.csv'
-        ))
-
-        if scarce_path.is_file() and abundant_path.is_file():
-            # read in dfs
-            scarce_df = pd.read_csv(scarce_path)
-            scarce_df = scarce_df.drop('Unnamed: 0', axis = 1)
-            scarce_df = scarce_df.sort_values(by=[f'{opt.datasets[0]}'])
-            abundant_df = pd.read_csv(abundant_path)
-            abundant_df = abundant_df.drop('Unnamed: 0', axis = 1)
-            abundant_df = abundant_df.sort_values(by=[f'{opt.datasets[1]}'])
-
-            for idx_plot in range(4):
-                # scarce
-                plots[idx_plot].line(
-                    source = scarce_df,
-                    x = opt.datasets[0],
-                    y = opt.plotnames[idx_plot],
-                    legend_label = f'STL baseline {opt.datasets[0]}',
-                    color = 'black',
-                    line_width = 1.5,
-                    line_dash = [2, 2]
-                )
-
-                # abundant
-                abundant_value = abundant_df.loc[
-                    abundant_df[opt.datasets[1]] == max(abundant_df[opt.datasets[1]]), 
-                    opt.plotnames[idx_plot]
-                ]
-
-                plots[idx_plot].line(
-                    x = [0, 1],
-                    y = [abundant_value, abundant_value],
-                    legend_label = f'STL baseline {opt.datasets[1]}',
-                    color = 'black',
-                    line_width = 1.5,
-                    line_dash = 'dashdot'
-                )
-            print ('successfully plotted baselines')
-        else:
-            print (f'    one or both of {scarce_path}, {abundant_path} does not exist; no baselines')
     return plots
 
 def _initialize_colormap(opt):
     _dataset_exps = [
         f'{dataset} ~ {experimentname}' 
-        for experimentname in opt.experimentnames
         for dataset in opt.datasets 
+        for experimentname in opt.experimentnames
         ]
-
     colormap = {
         dataset_exp : opt.colors[i]
         for i, dataset_exp in enumerate(_dataset_exps)
     }
     return colormap
+
+
+def _plot_best(plots, opt):
+    for dataset in opt.datasets:
+        df = pd.read_csv(os.path.join(
+            opt.bestdir, f'summary_{dataset}.csv'
+            ))
+        df = df.drop('Unnamed: 0', axis = 1)
+        df = df.sort_values(by=[f'{opt.datasets[0]}'])
+        x_data = opt.datasets[0]
+        for idx_plot in range(4):
+            # we might not want to plot best run for each metric;
+            # bokeh breaks when plotting NaN, so filter those out first
+            if not df[opt.plotnames[idx_plot]].isnull().values.any():
+                # Add glyphs
+                plots[idx_plot].square(
+                    source = df,
+                    x = x_data,
+                    y = opt.plotnames[idx_plot],
+                    legend_label = f'{dataset} ~ best_MTL',
+                    color = opt.bestruncolor,
+                    line_width = 1.5,
+                    size = 10,
+                    fill_color = None,
+
+                )
+
+                plots[idx_plot].line(
+                    source = df,
+                    x = x_data,
+                    y = opt.plotnames[idx_plot],
+                    legend_label = f'{dataset} ~ best_MTL',
+                    line_color = opt.bestruncolor,
+                    line_width = 2,
+                )
+    return plots
+    
+
+def _plot_baselines(plots, opt):
+    # name paths
+    #scarce
+    scarce_path = Path(os.path.join(
+        opt.modeldir, 
+        'STL_baselines',
+        f"STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
+        f'summary_{opt.datasets[0]}.csv',
+    ))
+
+    # abundant
+    abundant_path = Path(os.path.join(
+        opt.modeldir,
+        'STL_baselines',
+        f'STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
+        f'summary_{opt.datasets[1]}.csv'
+    ))
+
+    if scarce_path.is_file() and abundant_path.is_file():
+        # read in dfs
+        scarce_df = pd.read_csv(scarce_path)
+        scarce_df = scarce_df.drop('Unnamed: 0', axis = 1)
+        scarce_df = scarce_df.sort_values(by=[f'{opt.datasets[0]}'])
+        abundant_df = pd.read_csv(abundant_path)
+        abundant_df = abundant_df.drop('Unnamed: 0', axis = 1)
+        abundant_df = abundant_df.sort_values(by=[f'{opt.datasets[1]}'])
+
+        for idx_plot in range(4):
+            # scarce
+            plots[idx_plot].line(
+                source = scarce_df,
+                x = opt.datasets[0],
+                y = opt.plotnames[idx_plot],
+                legend_label = f'STL baseline {opt.datasets[0]}',
+                color = 'black',
+                line_width = 1.5,
+                line_dash = [2, 2]
+            )
+
+            # abundant
+            abundant_value = abundant_df.loc[
+                abundant_df[opt.datasets[1]] == max(abundant_df[opt.datasets[1]]), 
+                opt.plotnames[idx_plot]
+            ]
+
+            plots[idx_plot].line(
+                x = [0, 1],
+                y = [abundant_value, abundant_value],
+                legend_label = f'STL baseline {opt.datasets[1]}',
+                color = 'black',
+                line_width = 1.5,
+                line_dash = 'dashdot'
+            )
+        print ('successfully plotted baselines')
+    else:
+        print (f'    one or both of {scarce_path}, {abundant_path} does not exist; no baselines')
+    return plots
+
 
 
 def df_single_contrast_all_models(
@@ -377,7 +433,8 @@ def df_single_contrast_all_models(
 
             # load model
             the_model.load_state_dict(torch.load(
-                model_filepath, map_location = opt.device,
+                model_filepath, 
+                map_location = opt.device,
                 )
             )
             the_model.eval()
@@ -484,6 +541,11 @@ def _get_model_filedir(dataset, opt, idx_experimentname):
     return model_filedir
 
 def _get_model_info(dataset, opt, idx_experimentname):
+
+    # figure out where to load saved weights from
+    model_filedir = _get_model_filedir(dataset, opt, idx_experimentname)
+
+
     ### figure out which model skeleton to use ###
     if 'STL' in opt.experimentnames[idx_experimentname]:
         with torch.no_grad():
@@ -493,7 +555,17 @@ def _get_model_info(dataset, opt, idx_experimentname):
                 
     elif 'MTL' in opt.experimentnames[idx_experimentname]:
         ### remember to change the inputs manually
+        # v1
         if opt.backcompat[idx_experimentname]:
+            with torch.no_grad():
+                the_model = MTL_VarNet_backcompat(
+                    datasets = opt.datasets,
+                    num_cascades = opt.numblocks[idx_experimentname],
+                    # begin_blocks = opt.beginblocks[idx_experimentname],
+                    shared_blocks = opt.sharedblocks[idx_experimentname],
+                    ).to(opt.device)
+        # v3
+        elif opt.backcompat[idx_experimentname]:
             with torch.no_grad():
                 the_model = MTL_VarNet_backcompat(
                     datasets = opt.datasets,
@@ -516,56 +588,13 @@ def _get_model_info(dataset, opt, idx_experimentname):
     else:
         raise ValueError(f'{opt.experimentnames[idx_experimentname]} not valid')
     
-    # figure out where to load saved weights from
-    model_filedir = _get_model_filedir(dataset, opt, idx_experimentname)
+
     return the_model, model_filedir
 
 
 
 
-def _show_best(plots, df_psnr_ssim, df_loss_nrmse, opt, dataset):
-    df_psnr_ssim = df_psnr_ssim.sort_values(by = [f'{opt.datasets[0]}'])
-    df_loss_nrmse = df_loss_nrmse.sort_values(by = [f'{opt.datasets[0]}'])
-    for idx_plot in range(4):
-        if idx_plot == 0 or idx_plot == 3:
-            plots[idx_plot].square(
-                source = df_loss_nrmse,
-                x = opt.datasets[0],
-                y = opt.plotnames[idx_plot],
-                legend_label = f'{dataset} best MTL',
-                color = opt.bestruncolor,
-                line_width = 1.5,
-                size = 10,
-                fill_color = None,
-            )
-            plots[idx_plot].line(
-                source = df_loss_nrmse,
-                x = opt.datasets[0],
-                y = opt.plotnames[idx_plot],
-                legend_label = f'{dataset} best MTL',
-                line_color = opt.bestruncolor,
-                line_width = 2,
-            )
-        if idx_plot == 1 or idx_plot == 2:
-            plots[idx_plot].square(
-                source = df_psnr_ssim,
-                x = opt.datasets[0],
-                y = opt.plotnames[idx_plot],
-                legend_label = f'{dataset} best MTL',
-                color = opt.bestruncolor,
-                line_width = 1.5,
-                size = 10,
-                fill_color = None,
-            )
-            plots[idx_plot].line(
-                source = df_psnr_ssim,
-                x = opt.datasets[0],
-                y = opt.plotnames[idx_plot],
-                legend_label = f'{dataset} best MTL',
-                line_color = opt.bestruncolor,
-                line_width = 2,
-            )
-    return plots
+
 
 def save_bokeh_plots(writer, opt):
     if opt.createplots:
@@ -585,11 +614,10 @@ def save_bokeh_plots(writer, opt):
             accelerations = [int(np.mean(opt.accelerations))],
             shuffle = False,
             num_workers = opt.numworkers,
+            # use same mask so aliasing patterns are comparable
+            use_same_mask = True, 
         )
 
-        # for saving metrics from best runs (see opt.showbest)
-        if opt.showbest:
-            pass
         # iterate through each model (i.e. N = _) in the folder
         for idx_experimentname, experimentname in enumerate(opt.experimentnames): 
 
@@ -612,8 +640,6 @@ def save_bokeh_plots(writer, opt):
                     df = df.sort_values(by=[f'{dataset}'])
                     x_data = dataset 
                 
-                if opt.showbest:
-                    pass
 
                 for idx_plot in range(4):
                     # Add glyphs
@@ -634,12 +660,12 @@ def save_bokeh_plots(writer, opt):
                         line_color = colormap[f'{dataset} ~ {experimentname}'],
                         line_width = 2,
                     )
-        
-        if opt.showbest:
-            pass
-    
+
     # customize and save plots    
-    if opt.createplots:     
+    if opt.createplots:
+        if opt.showbest:
+            plots = _plot_best(plots, opt)   
+              
         plotdir = f"plots/{opt.plotdir}"
             
         if not os.path.isdir(plotdir):

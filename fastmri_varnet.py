@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from fastmri.data import transforms
 
 from fastmri_unet import MHUnet
+from fastmri_att_unet import AttUnet
 
 class NormUnet(nn.Module):
     """
@@ -43,14 +44,16 @@ class NormUnet(nn.Module):
             contrast_count: number of dataset contrasts
         """
         super().__init__()
-        assert which_unet in ['Unet', 'MHUnet'], f'unet {which_unet} not supported'
-        if which_unet == 'Unet':
+        assert which_unet in ['trueshare', 'mhushare', 'attenshare', 'split'], "variable which_unet not supported"
+        if which_unet == 'trueshare' or which_unet == 'split':
             decoder_heads = 1
-        elif which_unet == 'MHUnet':
-            assert contrast_count > 1, 'no. contrasts must be int > 1 for MHUnet'
+        elif which_unet == 'mhushare' or which_unet == 'attenshare':
+            assert contrast_count > 1, 'no. contrasts must be int > 1 for mhu or att unet'
             decoder_heads = contrast_count
 
-        self.unet = MHUnet(
+        # attentional network is a separate module
+        if which_unet == 'attenshare':
+            self.unet = AttUnet(
                 in_chans = in_chans,
                 out_chans = out_chans,
                 chans = chans,
@@ -58,6 +61,18 @@ class NormUnet(nn.Module):
                 drop_prob = drop_prob,
                 decoder_heads = decoder_heads,
             )
+
+        # trueshare, mhushare, and split all use the same network
+        # Differentiation between the three happens in MHUnet or VarNet_MTL
+        else:
+            self.unet = MHUnet(
+                    in_chans = in_chans,
+                    out_chans = out_chans,
+                    chans = chans,
+                    num_pool_layers = num_pools,
+                    drop_prob = drop_prob,
+                    decoder_heads = decoder_heads,
+                )
 
 
     def complex_to_chan_dim(self, x: torch.Tensor) -> torch.Tensor:
