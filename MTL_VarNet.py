@@ -90,7 +90,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--device', default='cuda:2',
+    '--device', nargs='+', default=['cuda:2'],
     help='cuda:2 device default'
 )
 
@@ -220,12 +220,12 @@ def main(opt):
         print('generated dataloaders')
 
         # other inputs to MTL wrapper
-        device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
         varnet = MTL_VarNet(
             opt.datasets,
             opt.blockstructures,
             opt.shareetas,
-            ).to(device)
+            opt.device,
+            )
 
         optimizer = torch.optim.Adam(varnet.parameters(), lr = opt.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
@@ -233,7 +233,7 @@ def main(opt):
         multi_task_trainer(
             train_dloader[0], val_dloader[0], 
             train_dloader[1], val_dloader[1], # ratios dicts
-            varnet, device, writer_tensorboard,
+            varnet, writer_tensorboard,
             optimizer, scheduler,
             opt,
         )

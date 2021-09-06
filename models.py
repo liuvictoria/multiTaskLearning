@@ -70,7 +70,7 @@ class VarNetBlockMTL(nn.Module):
     Adds 
     """
 
-    def __init__(self, model: nn.Module, datasets: List[str], share_etas: bool):
+    def __init__(self, model: nn.Module, datasets: List[str], share_etas: bool, share_blocks: bool = True):
         """
         Args:
             model: Module for "regularization" component of variational
@@ -83,9 +83,12 @@ class VarNetBlockMTL(nn.Module):
             nn.Parameter(torch.ones(1))
             for _ in range(eta_count)
             )
-        self.model = model
+
+        model_count = 1 if share_blocks else len(datasets)
+        self.model = nn.ModuleList([model for _ in range(model_count)])
         
         self.share_etas = share_etas
+        self.share_blocks = share_blocks
         
 
     def sens_expand(self, x: torch.Tensor, sens_maps: torch.Tensor) -> torch.Tensor:
@@ -106,7 +109,7 @@ class VarNetBlockMTL(nn.Module):
         int_contrast: int,
     ) -> torch.Tensor:
         '''
-        note that contrast is not str, but rather int index of opt.datasets
+        note that int_contrast is not str, but rather int index of opt.datasets
         this is implemented in the VarNet portion
         '''
         
@@ -117,8 +120,10 @@ class VarNetBlockMTL(nn.Module):
         idx_eta = 0 if self.share_etas else int_contrast
         soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.etas[idx_eta]
 
+        # regularization step (i.e. UNet)
+        idx_model = 0 if self.share_blocks else int_contrast
         model_term = self.sens_expand(
-            self.model(
+            self.model[idx_model](
                 self.sens_reduce(current_kspace, sens_maps),
                 int_contrast = int_contrast,
                 ), 
@@ -176,6 +181,145 @@ class STL_VarNet(nn.Module):
 
 
 
+# """
+# =========== MTL_VarNet ============
+# """
+
+# class MTL_VarNet(nn.Module):
+#     """
+#     A full variational network model.
+
+#     This model applies a combination of soft data consistency with a U-Net
+#     regularizer. To use non-U-Net regularizers, use VarNetBock.
+#     """
+
+#     def __init__(
+#         self,
+#         datasets: list,
+#         blockstructures: list,
+#         share_etas: bool,
+#         chans: int = 18,
+#         pools: int = 4,
+        
+#     ):
+#         super().__init__()
+
+#         # inputs
+#         self.blockstructures = blockstructures
+#         self.datasets = datasets # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
+#         self.share_etas = share_etas
+
+#         # figure out how many blocks of each type:
+#         block_counts = Counter(self.blockstructures)
+
+#         self.trueshare = nn.ModuleList([
+#             VarNetBlockMTL(
+#                 NormUnet(chans, pools, which_unet = 'trueshare',), 
+#                 datasets,
+#                 share_etas = share_etas,
+#                 ) for _ in range(block_counts['trueshare'])
+#         ])
+        
+
+#         self.mhushare = nn.ModuleList([
+#             VarNetBlockMTL(
+#                 NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
+#                 datasets,
+#                 share_etas = share_etas,
+#                 ) for _ in range(block_counts['mhushare'])
+#         ])
+
+#         self.attenshare = nn.ModuleList([
+#             VarNetBlockMTL(
+#                 NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
+#                 datasets,
+#                 share_etas = share_etas,
+#                 ) for _ in range(block_counts['attenshare'])
+#         ])
+
+#         self.split_contrasts = nn.ModuleList()
+#         for idx_contrast, dataset in enumerate(datasets):
+#             self.split_contrasts.add_module(
+#                 f'splitblock_{idx_contrast}',
+#                 nn.ModuleList([
+#                 VarNetBlockMTL(
+#                     NormUnet(chans, pools, which_unet = 'split',), 
+#                     datasets,
+#                     share_etas = share_etas,
+#                     ) for _ in range(block_counts['split'])
+#             ])
+#             )
+
+#         # uncert (specifically 2 contrasts)
+#         self.logsigmas = nn.ParameterList(
+#             nn.Parameter(torch.FloatTensor([-0.5]))
+#             for _ in datasets
+#             )
+
+
+#     def forward(
+#         self,
+#         masked_kspace: torch.Tensor, 
+#         mask: torch.Tensor,
+#         esp_maps: torch.Tensor,
+#         contrast: str,
+#     ) -> torch.Tensor:
+  
+
+#         kspace_pred = masked_kspace.clone()
+
+#         # contrast int for the block to determine which eta / 
+#         try:
+#             int_contrast = self.datasets.index(contrast)
+#         except:
+#             raise ValueError(f'{contrast} is not in self.datasets')
+
+#         # make counter for each type of block
+#         counter = [0 for _ in range(4)] # currently four types of blocks
+
+#         # go thru the blocks (usually 12)
+#         for idx_structure, structure in enumerate(self.blockstructures):
+#             # print(f'on {idx_structure} block, {structure}')
+#             if structure == 'trueshare':
+#                 kspace_pred = self.trueshare[counter[0]](
+#                     kspace_pred, masked_kspace, mask, esp_maps, 
+#                     int_contrast = int_contrast,
+#                 )
+#                 counter[0] += 1
+
+#             elif structure == 'mhushare':
+#                 kspace_pred = self.mhushare[counter[1]](
+#                     kspace_pred, masked_kspace, mask, esp_maps, 
+#                     int_contrast = int_contrast,
+#                 )
+#                 counter[1] += 1
+
+#             elif structure == 'attenshare':
+#                 kspace_pred = self.attenshare[counter[2]](
+#                     kspace_pred, masked_kspace, mask, esp_maps, 
+#                     int_contrast = int_contrast,
+#                 )
+#                 counter[2] += 1
+
+#             elif structure == 'split':
+#                 block = f'splitblock_{int_contrast}'
+#                 kspace_pred = getattr(self.split_contrasts, block)[counter[3]](
+#                         kspace_pred, masked_kspace, mask, esp_maps, 
+#                         int_contrast = int_contrast,
+#                     )
+#             else:
+#                 raise ValueError(f'{structure} block structure not supported')
+        
+#         im_coil = fastmri.ifft2c(kspace_pred)
+#         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(
+#             dim=1, keepdim=True
+#         )
+        
+#         return kspace_pred, im_comb, self.logsigmas
+
+
+
+
 """
 =========== MTL_VarNet ============
 """
@@ -193,9 +337,9 @@ class MTL_VarNet(nn.Module):
         datasets: list,
         blockstructures: list,
         share_etas: bool,
+        device: list,
         chans: int = 18,
         pools: int = 4,
-        
     ):
         super().__init__()
 
@@ -203,53 +347,65 @@ class MTL_VarNet(nn.Module):
         self.blockstructures = blockstructures
         self.datasets = datasets # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
         self.share_etas = share_etas
+        self.device = device
 
-        # figure out how many blocks of each type:
-        block_counts = Counter(self.blockstructures)
+        # master list of all unrolled blocks, in sequential order
+        self.unrolled = []
 
-        self.trueshare = nn.ModuleList([
-            VarNetBlockMTL(
-                NormUnet(chans, pools, which_unet = 'trueshare',), 
-                datasets,
-                share_etas = share_etas,
-                ) for _ in range(block_counts['trueshare'])
-        ])
-        
+        for blockstructure in blockstructures:
+            if blockstructure == 'trueshare':
+                self.unrolled.append(VarNetBlockMTL(
+                    NormUnet(chans, pools, which_unet = 'trueshare',), 
+                    datasets,
+                    share_etas = share_etas,
+                ))
+            
+            elif blockstructure == 'mhushare':
+                self.unrolled.append(VarNetBlockMTL(
+                    NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
+                    datasets,
+                    share_etas = share_etas,
+                ))
+            
+            elif blockstructure == 'attenshare':
+                self.unrolled.append(VarNetBlockMTL(
+                    NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
+                    datasets,
+                    share_etas = share_etas,
+                ))
 
-        self.mhushare = nn.ModuleList([
-            VarNetBlockMTL(
-                NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
-                datasets,
-                share_etas = share_etas,
-                ) for _ in range(block_counts['mhushare'])
-        ])
-
-        self.attenshare = nn.ModuleList([
-            VarNetBlockMTL(
-                NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
-                datasets,
-                share_etas = share_etas,
-                ) for _ in range(block_counts['attenshare'])
-        ])
-
-        self.split_contrasts = nn.ModuleList()
-        for idx_contrast, dataset in enumerate(datasets):
-            self.split_contrasts.add_module(
-                f'splitblock_{idx_contrast}',
-                nn.ModuleList([
-                VarNetBlockMTL(
+            elif blockstructure == 'split':
+                self.unrolled.append(VarNetBlockMTL(
                     NormUnet(chans, pools, which_unet = 'split',), 
                     datasets,
                     share_etas = share_etas,
-                    ) for _ in range(block_counts['split'])
-            ])
-            )
+                    share_blocks = False,
+                ))
+
+            else:
+                raise ValueError(f'{blockstructure} block structure not supported')
+
+        # gpu distributed training if we have two gpus (won't have more than 2 due to space)
+        if len(device) > 1:
+            self.seq1 = nn.ModuleList([
+                self.unrolled[idx_block] 
+                for idx_block in range(len(blockstructures) // 2)
+            ]).to(device[1])
+
+            self.seq2 = nn.ModuleList([
+                self.unrolled[idx_block] 
+                for idx_block in range(len(blockstructures) // 2, len(blockstructures))
+            ]).to(device[0])
+
+        else:
+            self.seq1 = nn.ModuleList([self.unrolled]).to(device[0])
+
 
         # uncert (specifically 2 contrasts)
         self.logsigmas = nn.ParameterList(
             nn.Parameter(torch.FloatTensor([-0.5]))
             for _ in datasets
-            )
+            ).to(device[0])
 
 
     def forward(
@@ -269,41 +425,39 @@ class MTL_VarNet(nn.Module):
         except:
             raise ValueError(f'{contrast} is not in self.datasets')
 
-        # make counter for each type of block
-        counter = [0 for _ in range(4)] # currently four types of blocks
 
-        # go thru the blocks (usually 12)
-        for idx_structure, structure in enumerate(self.blockstructures):
-            # print(f'on {idx_structure} block, {structure}')
-            if structure == 'trueshare':
-                kspace_pred = self.trueshare[counter[0]](
+        # distributed training
+        if len(self.device) > 1:
+            # start on second gpu
+            kspace_pred, masked_kspace = kspace_pred.to(self.device[1]), masked_kspace.to(self.device[1])
+            mask, esp_maps = mask.to(self.device[1]), esp_maps.to(self.device[1])
+
+            for block in self.seq1:
+                kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
                     int_contrast = int_contrast,
                 )
-                counter[0] += 1
-
-            elif structure == 'mhushare':
-                kspace_pred = self.mhushare[counter[1]](
+            
+            # go to first gpu
+            kspace_pred, masked_kspace = kspace_pred.to(self.device[0]), masked_kspace.to(self.device[0])
+            mask, esp_maps = mask.to(self.device[0]), esp_maps.to(self.device[0])
+            for block in self.seq2:
+                kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
                     int_contrast = int_contrast,
                 )
-                counter[1] += 1
 
-            elif structure == 'attenshare':
-                kspace_pred = self.attenshare[counter[2]](
+        else:
+            # do all work on first gpu
+            kspace_pred, masked_kspace = kspace_pred.to(self.device[0]), masked_kspace.to(self.device[0])
+            mask, esp_maps = mask.to(self.device[0]), esp_maps.to(self.device[0])
+            for block in self.seq1:
+                kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
                     int_contrast = int_contrast,
                 )
-                counter[2] += 1
 
-            elif structure == 'split':
-                block = f'splitblock_{int_contrast}'
-                kspace_pred = getattr(self.split_contrasts, block)[counter[3]](
-                        kspace_pred, masked_kspace, mask, esp_maps, 
-                        int_contrast = int_contrast,
-                    )
-            else:
-                raise ValueError(f'{structure} block structure not supported')
+        # training always ends on first gpu; important for loss functions in above
         
         im_coil = fastmri.ifft2c(kspace_pred)
         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(

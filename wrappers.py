@@ -20,7 +20,7 @@ from utils import label_blockstructures, plot_quadrant, write_tensorboard
 def single_task_trainer(
     train_loader, val_loader,
     train_ratios, val_ratios,
-    single_task_model,
+    single_task_model, 
     device, writer,
     optimizer, scheduler,
     opt
@@ -200,8 +200,7 @@ def _get_naive_weights(train_ratios, opt):
 def multi_task_trainer(
     train_loader, val_loader,
     train_ratios, val_ratios,
-    multi_task_model,
-    device, writer,
+    multi_task_model, writer,
     optimizer, scheduler,
     opt
 ):
@@ -263,20 +262,20 @@ def multi_task_trainer(
 
         for kspace, mask, esp, im_fs, contrast in train_dataset:
             contrast = contrast[0] # torch dataset loader returns as tuple
-            kspace, mask = kspace.to(device), mask.to(device)
-            esp, im_fs = esp.to(device), im_fs.to(device)
 
             # grad accumulation 
             iteration += 1
             batch_count += 1
 
-            # forward
+            # forward; outputs on opt.device[0]
             _, im_us, logsigma = multi_task_model(
                 kspace, mask, esp, contrast,
                 )
 
             # crop so im_us has same size as im_fs
             im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
+            # bring im_fs to the same gpu as im_us
+            im_fs = im_fs.to(opt.device[0])
 
             # loss
             if opt.weighting == 'naive' or opt.weighting == 'dwa':
@@ -321,15 +320,16 @@ def multi_task_trainer(
             for val_idx, val_data in enumerate(val_dataset):
                 kspace, mask, esp, im_fs, contrast = val_data
                 contrast = contrast[0]
-                kspace, mask = kspace.to(device), mask.to(device)
-                esp, im_fs = esp.to(device), im_fs.to(device)
 
+                # forward pass; outputs are on opt.device[0]
                 _, im_us, logsigma = multi_task_model(
                     kspace, mask, esp, contrast,
+                    ) 
 
-                    ) # forward pass
                 # crop so im_us has same size as im_fs
                 im_us = transforms.complex_center_crop(im_us, tuple(im_fs.shape[2:4]))
+                # bring im_fs to the same device as im_us
+                im_fs = im_fs.to(opt.device[0])
                 loss = criterion(im_fs, im_us)
 
                 # losses and metrics are averaged over epoch at the end
