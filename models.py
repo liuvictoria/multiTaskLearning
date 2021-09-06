@@ -388,17 +388,17 @@ class MTL_VarNet(nn.Module):
         # gpu distributed training if we have two gpus (won't have more than 2 due to space)
         if len(device) > 1:
             self.seq1 = nn.ModuleList([
-                self.unrolled[idx_block] 
-                for idx_block in range(len(blockstructures) // 2)
+                *self.unrolled[: len(blockstructures) // 2]
             ]).to(device[1])
 
             self.seq2 = nn.ModuleList([
-                self.unrolled[idx_block] 
-                for idx_block in range(len(blockstructures) // 2, len(blockstructures))
+                *self.unrolled[len(blockstructures) // 2 : len(blockstructures)] 
             ]).to(device[0])
 
         else:
-            self.seq1 = nn.ModuleList([self.unrolled]).to(device[0])
+            self.seq1 = nn.ModuleList([
+                *self.unrolled[::]
+            ]).to(device[0])
 
 
         # uncert (specifically 2 contrasts)
@@ -457,7 +457,7 @@ class MTL_VarNet(nn.Module):
                     int_contrast = int_contrast,
                 )
 
-        # training always ends on first gpu; important for loss functions in above
+        # training always ends on first gpu; important for loss functions
         
         im_coil = fastmri.ifft2c(kspace_pred)
         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(

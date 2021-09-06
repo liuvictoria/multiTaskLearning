@@ -155,6 +155,11 @@ opt = parser.parse_args()
 
 # datasets
 run_name = f"runs/{opt.experimentname}_{opt.network}_{'_'.join(opt.datasets)}/"
+model_name = f"models/{opt.experimentname}_" + \
+    f"{'strat_' if opt.stratified else ''}" + \
+    f"{opt.network}_{'_'.join(opt.datasets)}/"
+if not os.path.isdir(model_name):
+    os.makedirs(model_name)
 writer_tensorboard = SummaryWriter(log_dir = run_name)
 
 def main(opt):
@@ -207,10 +212,16 @@ def main(opt):
             opt,
         )
         
+# write json files to models and runs directories; for future reference
 with open(
     os.path.join(run_name,'parameters.json'), 'w'
     ) as parameter_file:
    json.dump(vars(opt), parameter_file)  
+
+with open(
+    os.path.join(model_name,'parameters.json'), 'w'
+    ) as parameter_file:
+   json.dump(vars(opt), parameter_file)   
 
 main(opt)
 writer_tensorboard.flush()
