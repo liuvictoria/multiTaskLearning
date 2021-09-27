@@ -93,7 +93,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--weighting', default='naive',
-    help='naive, uncert, dwa, pareto'
+    help='naive, uncert, dwa'
 )
 
 parser.add_argument(
@@ -105,7 +105,7 @@ parser.add_argument(
 # dataset properties
 parser.add_argument(
     '--datasets', nargs='+',
-    help='names of one or two sets of data files i.e. div_coronal_pd_fs div_coronal_pd; input the downsampled dataset first',
+    help='names of relevant tasks',
     required = True,
 )
 
