@@ -14,3 +14,5 @@ runs_sens/
 *events.out.tfevents.*
 /development/
 *.html
+*.ipynb
+.DS_Store
