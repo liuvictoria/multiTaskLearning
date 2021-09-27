@@ -1,3 +1,10 @@
+"""Docstring for stl.py
+
+This is the user-facing module for STL training.
+Run this module from the command line, and pass in the
+appropriate arguments to define the model and data.
+"""
+
 import argparse
 import json
 import os
@@ -5,10 +12,6 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-
-import fastmri
-from fastmri.models.unet import Unet
-from fastmri.models.varnet import *
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -46,9 +49,9 @@ parser.add_argument(
 )
 parser.add_argument(
     '--gradaverage', default=0, type=int,
-    help='''if true, will average accumulated grads before optimizer.step
+    help="""if true, will average accumulated grads before optimizer.step
     if false, gradaccumulation will occur without averaging (i.e. no hooks)
-    value does not matter if gradaccumulation is equal to 1'''
+    value does not matter if gradaccumulation is equal to 1"""
 )
 
 
@@ -63,10 +66,10 @@ parser.add_argument(
 )
 parser.add_argument(
     '--weightsdir', default=None,
-    help='''for transfer learning, give directory for loading weights;
+    help="""for transfer learning, give directory for loading weights;
     i.e. '/mnt/dense/vliu/summer_runs_models/models/STL_baselines/STL_nojoint_varnet_div_coronal_pd/N=481_l1.pt'
     default to None because we're not usually doing transfer
-    '''
+    """
 )
 parser.add_argument(
     '--device', default='cuda:2',
@@ -82,9 +85,9 @@ parser.add_argument(
 
 parser.add_argument(
     '--mixeddata', default=1, type=int,
-    help='''If true, the model trained on mixed data;
-        almost always true except for STL trained on single contrast;
-        0 for False; 1 for True'''
+    help="""If true, the model trained on mixed data;
+        almost always true except for STL trained on single task;
+        0 for False; 1 for True"""
 )
 
 parser.add_argument(
@@ -98,16 +101,16 @@ parser.add_argument(
         'div_coronal_pd_fs', 'div_coronal_pd',
         ], 
     nargs='+',
-    help='''names of both datasets i.e. div_coronal_pd_fs div_coronal_pd;
+    help="""names of both datasets i.e. div_coronal_pd_fs div_coronal_pd;
     different from opt.datasets if opt.datasets only has one dataset;
     used to determine tensorboard MR images;
     this is annoying but allows for MR image to match across runs
-    input the downsampled dataset first'''
+    input the downsampled dataset first"""
 )
 
 parser.add_argument(
     '--scarcities', default=[0, 1, 2, 3], type=int, nargs='+',
-    help='number of samples in second contrast will be decreased by 1/2^N; i.e. 0 1 2'
+    help='number of samples in second task will be decreased by 1/2^N; i.e. 0 1 2'
     )
 
 parser.add_argument(
@@ -119,6 +122,19 @@ parser.add_argument(
     '--centerfracs', default=[0.05, 0.06, 0.07], type=int, nargs='+',
     help='list of center fractions sampled of k-space for training; val is average centerfracs'
     )
+
+parser.add_argument(
+    '--stratified', default=0, type=int,
+    help="""if true, stratifies the dataloader"""
+)
+
+parser.add_argument(
+    '--stratifymethod', default='upsample',
+    help="""
+    one of [upsample, downsample] for
+    scarce, abundant dataset, respectively
+    does not matter if --stratified is false"""
+)
 
 parser.add_argument(
     '--numworkers', default=16, type=int,
@@ -134,7 +150,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '--verbose', default=1, type=int,
-    help='''if true, prints to console average costs / metrics'''
+    help="""if true, prints to console average costs / metrics"""
 )
 parser.add_argument(
     '--tensorboard', default=1, type=int,
@@ -153,16 +169,27 @@ opt = parser.parse_args()
 =========== Runs ============
 """    
 
-# datasets
-run_name = f"runs/{opt.experimentname}_{opt.network}_{'_'.join(opt.datasets)}/"
-model_name = f"models/{opt.experimentname}_" + \
-    f"{'strat_' if opt.stratified else ''}" + \
-    f"{opt.network}_{'_'.join(opt.datasets)}/"
-if not os.path.isdir(model_name):
-    os.makedirs(model_name)
-writer_tensorboard = SummaryWriter(log_dir = run_name)
-
 def main(opt):
+    """Calls wrappers.py for training
+
+    Creates data loaders, initializes model, and defines learning parameters.
+    Trains STL from command line.
+
+    Parameters
+    ----------
+    opt : argparse.ArgumentParser
+        Refer to help documentation above.
+    
+    Returns
+    -------
+    None
+
+    See Also
+    --------
+    single_task_trainer from wrappers.py
+
+    """
+    
     basedirs = [
         os.path.join(opt.datadir, dataset)
         for dataset in opt.datasets
@@ -211,18 +238,28 @@ def main(opt):
             optimizer, scheduler,
             opt,
         )
-        
-# write json files to models and runs directories; for future reference
-with open(
-    os.path.join(run_name,'parameters.json'), 'w'
-    ) as parameter_file:
-   json.dump(vars(opt), parameter_file)  
 
-with open(
-    os.path.join(model_name,'parameters.json'), 'w'
-    ) as parameter_file:
-   json.dump(vars(opt), parameter_file)   
+if __name__ == '__main__':
+    # run / model name
+    run_name = f"runs/{opt.experimentname}_{opt.network}_{'_'.join(opt.datasets)}/"
+    model_name = f"models/{opt.experimentname}_" + \
+        f"{'strat_' if opt.stratified else ''}" + \
+        f"{opt.network}_{'_'.join(opt.datasets)}/"
+    if not os.path.isdir(model_name):
+        os.makedirs(model_name)
+    writer_tensorboard = SummaryWriter(log_dir = run_name)
 
-main(opt)
-writer_tensorboard.flush()
-writer_tensorboard.close()
+    # write json files to models and runs directories; for future reference
+    with open(
+        os.path.join(run_name,'parameters.json'), 'w'
+        ) as parameter_file:
+        json.dump(vars(opt), parameter_file)  
+
+    with open(
+        os.path.join(model_name,'parameters.json'), 'w'
+        ) as parameter_file:
+        json.dump(vars(opt), parameter_file)   
+
+    main(opt)
+    writer_tensorboard.flush()
+    writer_tensorboard.close()

@@ -1,76 +1,60 @@
-'''
-evaluate models on test dataset
-every time new model is changed, add it to ### portions
-'''
+"""Docstring for evaluate.py
+
+Evaluates models on test dataset. 
+Produces quantitative metrics and qualitative images.
+
+Notes
+-----
+Every time a new model is developed in models.py,
+one must manually add it to the imports
+
+"""
 import os
 import argparse
-
 from pathlib import Path
 import glob
+
 import numpy as np
-
-import torch
-from torch.utils.tensorboard import SummaryWriter
-
-import fastmri
-
-from dloader import genDataLoader
 import pandas as pd
 import bokeh.plotting
 # colors for plots
 from bokeh.palettes import Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8, Category10_10
 
+import torch
+from torch.utils.tensorboard import SummaryWriter
+import fastmri
 from fastmri.data import transforms
+
+from dloader import genDataLoader
 from utils import criterion, metrics
 from utils import plot_quadrant
 from utils import interpret_blockstructures
 
 ### add to this every time new model is trained ###
-from models_backcompat import MTL_VarNet_backcompat
 from models import STL_VarNet
 from models import MTL_VarNet
         
-# command line argument parser
+
+"""
+=========== command line parser ============
+"""
+
 parser = argparse.ArgumentParser(
-    description = 'define parameters and roots for STL training'
+    description = 'to load the correct model and data for inference'
 )
 
-# model stuff
-# backcompat stuff
-parser.add_argument(
-    '--backcompat', type=int, nargs='+',
-    help='''whether to use back-compatible model
-    with begin_blocks and shared_blocks and num_cascades
-    arguments''',
-    required = True,
-)
-
-# backcompat / STL stuff (don't delete)
+# specific to STL
 parser.add_argument(
     '--numblocks', default = [], type=int, nargs = '+',
-    help='''number of unrolled blocks in total for one forward pass;
-    match to each experimentnames''',
-)
-
-# backcompat stuff
-parser.add_argument(
-    '--beginblocks', default = [], type=int, nargs = '+',
-    help='''number of unrolled blocks in total for one forward pass;
-    match to each experimentnames''',
-)
-
-# backcompat stuff
-parser.add_argument(
-    '--sharedblocks', default = [], type=int, nargs = '+',
-    help='''number of unrolled blocks in total for one forward pass;
-    match to each experimentnames''',
+    help="""number of unrolled blocks in total for one forward pass;
+    match to each experimentnames""",
 )
 
 ############## required ##############
 parser.add_argument(
     '--blockstructures',
     nargs='+',
-    help='''explicit string of what each block is in MTL network;
+    help="""explicit string of what each block is in MTL network;
     i.e. IYYIVVIYV
     I : trueshare
     Y : mhushare
@@ -79,36 +63,36 @@ parser.add_argument(
     mhushare block shares encoder but not decoder;
     split does not share anything.
     For STL, type 'S' for all 12 blocks
-    ''',
+    """,
     required = True,
 )
 
 ############## required ##############
 parser.add_argument(
     '--shareetas', type=int, nargs = '+',
-    help='''for each --experimentnames, did we have one or more etas?
+    help="""for each --experimentnames, did we have one or more etas?
     1 for one eta; 0 for more than one etas
-    ''',
+    """,
     required = True,
     )
 
 ############## required ##############
 parser.add_argument(
     '--stratified', type=int, nargs='+',
-    help='''used to find the model name; give as list
-    0 for STL experiments''',
+    help="""used to find the model name; give as list
+    0 for STL experiments""",
     required = True,
 )
 
 ############## required ##############
 parser.add_argument(
     '--scarcemax', type=int,
-    help='''497 for div_coronal_pd_fs''',
+    help="""497 for div_coronal_pd_fs""",
     required = True,
 )
 
 parser.add_argument(
-    '--modeldir', default='/../../mnt/dense/vliu/models/',
+    '--modeldir', default='/../../mnt/dense/vliu/neurips/models/',
     help='models root directory; where are pretrained models are'
 )
 ############## required ##############
@@ -120,15 +104,15 @@ parser.add_argument(
 ############## required ##############
 parser.add_argument(
     '--mixeddata', type=int, nargs = '+',
-    help='''If true, the model trained on mixed data;
-        almost always true except for STL trained on single contrast
+    help="""If true, the model trained on mixed data;
+        almost always true except for STL trained on single task
         give a list to match experimentnames;
-        0 for False; 1 for True''',
+        0 for False; 1 for True""",
     required = True,
 )
 
 parser.add_argument(
-    '--device', default='cuda:2',
+    '--device', default='cuda:2', nargs='+',
     help='cuda:2 device default'
 )
 
@@ -136,9 +120,9 @@ parser.add_argument(
 ############## required ##############
 parser.add_argument(
     '--datasets', nargs='+',
-    help='''names of two sets of data files 
+    help="""names of two sets of data files 
         i.e. div_coronal_pd_fs div_coronal_pd; 
-        input the downsampled dataset first''',
+        input the downsampled dataset first""",
     required = True
 )
 
@@ -172,11 +156,11 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--colors', default = ['Category10_10'], nargs = '+',
-    help='''Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8, Category10_10
+    '--colors', default = ['Category20c_20'], nargs = '+',
+    help="""Category20_10, Category20c_20, Paired10, Set1_8, Set2_8, Colorblind8, Category10_10
     https://docs.bokeh.org/en/latest/docs/reference/palettes.html#bokeh-palette
     OR
-    give a list of custom colors'''
+    give a list of custom colors"""
 )
 
 parser.add_argument(
@@ -191,18 +175,18 @@ parser.add_argument(
 
 parser.add_argument(
     '--showbaselines', default=0, type=int,
-    help='''if true, shows baselines for STL non-joint learning;
-        line at N=20 for abundant contrast and N=2,5,10,20 for scarce contrast'''
+    help="""if true, shows baselines for STL non-joint learning;
+        line at N=20 for abundant task and N=2,5,10,20 for scarce task"""
 )
 
 parser.add_argument(
     '--showbest', default=0, type=int,
-    help='''if true, shows best metric / loss out of all runs; fails for STL_nojoint'''
+    help="""if true, shows best metric / loss out of all runs; manually created"""
 )
 
 parser.add_argument(
     '--bestdir', default='plots/best',
-    help='''directory of where best run summary plots are; csv's must be manually created'''
+    help="""directory of where best run summary plots are; csv's must be manually created"""
 )
 
 parser.add_argument(
@@ -217,8 +201,8 @@ parser.add_argument(
 
 parser.add_argument(
     '--tensorboard', default=1, type=int,
-    help='''if true, creates TensorBoard of MR; 0 1
-        note: even if 1, but already has summary.csv, won't give tensorboard'''
+    help="""if true, creates TensorBoard of MR; 0 1
+        note: even if 1, but already has summary.csv, won't give tensorboard"""
 )
 
 parser.add_argument(
@@ -230,7 +214,7 @@ parser.add_argument(
 ############## required ##############
 parser.add_argument(
     '--experimentnames', nargs='+',
-    help='''list of experiment names i.e. STL or MTAN_pareto etc.''',
+    help="""list of experiment names i.e. STL or MTAN_pareto etc.""",
     required = True
     
 )
@@ -240,7 +224,6 @@ opt = parser.parse_args()
 # change opt.colors from string to variable of color palette
 if len(opt.colors) == 1:
     # best color is in orange so don't have any runs plotted in orange.
-    # this is for final poster presentation, so remove this if it's confusing
     if opt.colors[0] == 'Category10_10':
         exec("%s = %s" % ('opt.colors', opt.colors[0]))
         opt.colors = list(opt.colors)
@@ -248,151 +231,54 @@ if len(opt.colors) == 1:
     else:
         exec("%s = %s" % ('opt.colors', opt.colors[0]))
 
-        
-# preliminary plot initialization / colors
-def _initialize_plots(opt):
-    x_axis_label = f'% of total PDw-FS MR slices'
 
-    plots = [
-        bokeh.plotting.figure(
-            width = 900,
-            height = 350,
-            x_axis_label = x_axis_label,
-            y_axis_label = opt.plotnames[i],
-            tooltips=[
-                (opt.plotnames[i], f"@{{{opt.plotnames[i]}}}"),
-                (f"% slices {opt.datasets[0]}", f"@{{{opt.datasets[0]}}}"),
-                (f"% slices {opt.datasets[1]}", f"@{{{opt.datasets[1]}}}"),
-                (f"% best run", f"@{{{opt.plotnames[i]}name}}"),
-            ],
-        ) for i in range(4) 
-    ]
+"""
+=========== user-facing functions ============
+"""
 
-    if opt.showbaselines:
-        plots = _plot_baselines(plots, opt)
-
-    return plots
-
-def _initialize_colormap(opt):
-    _dataset_exps = [
-        f'{dataset} ~ {experimentname}' 
-        for dataset in opt.datasets 
-        for experimentname in opt.experimentnames
-        ]
-    colormap = {
-        dataset_exp : opt.colors[i]
-        for i, dataset_exp in enumerate(_dataset_exps)
-    }
-    return colormap
-
-
-def _plot_best(plots, opt):
-    for dataset in opt.datasets:
-        df = pd.read_csv(os.path.join(
-            opt.bestdir, f'summary_{dataset}.csv'
-            ))
-        df = df.drop('Unnamed: 0', axis = 1)
-        df = df.sort_values(by=[f'{opt.datasets[0]}'])
-        x_data = opt.datasets[0]
-        for idx_plot in range(4):
-            # we might not want to plot best run for each metric;
-            # bokeh breaks when plotting NaN, so filter those out first
-            if not df[opt.plotnames[idx_plot]].isnull().values.any():
-                # Add glyphs
-                plots[idx_plot].square(
-                    source = df,
-                    x = x_data,
-                    y = opt.plotnames[idx_plot],
-                    legend_label = f'{dataset} ~ best_MTL',
-                    color = opt.bestruncolor,
-                    line_width = 1.5,
-                    size = 10,
-                    fill_color = None,
-
-                )
-
-                plots[idx_plot].line(
-                    source = df,
-                    x = x_data,
-                    y = opt.plotnames[idx_plot],
-                    legend_label = f'{dataset} ~ best_MTL',
-                    line_color = opt.bestruncolor,
-                    line_width = 2,
-                )
-    return plots
-    
-
-def _plot_baselines(plots, opt):
-    # name paths
-    #scarce
-    scarce_path = Path(os.path.join(
-        opt.modeldir, 
-        'STL_baselines',
-        f"STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
-        f'summary_{opt.datasets[0]}.csv',
-    ))
-
-    # abundant
-    abundant_path = Path(os.path.join(
-        opt.modeldir,
-        'STL_baselines',
-        f'STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
-        f'summary_{opt.datasets[1]}.csv'
-    ))
-
-    if scarce_path.is_file() and abundant_path.is_file():
-        # read in dfs
-        scarce_df = pd.read_csv(scarce_path)
-        scarce_df = scarce_df.drop('Unnamed: 0', axis = 1)
-        scarce_df = scarce_df.sort_values(by=[f'{opt.datasets[0]}'])
-        abundant_df = pd.read_csv(abundant_path)
-        abundant_df = abundant_df.drop('Unnamed: 0', axis = 1)
-        abundant_df = abundant_df.sort_values(by=[f'{opt.datasets[1]}'])
-
-        for idx_plot in range(4):
-            # scarce
-            plots[idx_plot].line(
-                source = scarce_df,
-                x = opt.datasets[0],
-                y = opt.plotnames[idx_plot],
-                legend_label = f'STL baseline {opt.datasets[0]}',
-                color = 'black',
-                line_width = 1.5,
-                line_dash = [2, 2]
-            )
-
-            # abundant
-            abundant_value = abundant_df.loc[
-                abundant_df[opt.datasets[1]] == max(abundant_df[opt.datasets[1]]), 
-                opt.plotnames[idx_plot]
-            ]
-
-            plots[idx_plot].line(
-                x = [0, 1],
-                y = [abundant_value, abundant_value],
-                legend_label = f'STL baseline {opt.datasets[1]}',
-                color = 'black',
-                line_width = 1.5,
-                line_dash = 'dashdot'
-            )
-        print ('successfully plotted baselines')
-    else:
-        print (f'    one or both of {scarce_path}, {abundant_path} does not exist; no baselines')
-    return plots
-
-
-
-def df_single_contrast_all_models(
-    the_model, test_dloader, model_filedir, contrast, idx_experimentname, writer
+def df_single_task_all_models(
+    the_model, test_dloader, model_filedir, task, idx_experimentname, writer
 ):
-    '''
-    creates dataframe ready for bokeh plotting
-    '''
+    """Calculates pandas dataframe ready for Bokeh plotting.
+
+    - Loads model weights evaluates test data of a single task
+    - Plots reconstructed images to TensorBoard
+    - Sorts df by dataset scarcity and save it to csv
+      so time-intensive calculation is only done once
+
+    Parameters
+    ----------
+    the_model : model-like object
+        Weights are not loaded. See the imports from models.py
+    test_dloader : genDataLoader
+        Contains slices from Test dataset. Identical undersampling masks
+    model_filedir : path object
+        Directory of .pt weights for a specified network
+    task : str
+        The task name (i.e. 'div_coronal_pd')
+   idx_experimentname : int
+        When analyzing multiple experiments, the index of the experiment
+        from the list of experiments. This is for correct column naming.
+    writer : TensorBoard SummaryWriter
+        Contains directory to save logs.
+
+    Returns
+    -------
+    df : pandas dataframe
+        columns are loss, ssim, psnr, nrmse, task1, (task2)
+        rows are various dataset scarcities
+        The task1/task2 columns denote how many slices are in each task.
+    
+    Notes
+    -----
+    This data structure is currently only suitable for two tasks.
+
+    """
 
     # check if this has already been run; if yes, don't rerun
     summary_file = Path(
         os.path.join(
-            model_filedir, f'summary_{contrast}.csv'
+            model_filedir, f'summary_{task}.csv'
         )
     )
     if summary_file.is_file():
@@ -421,9 +307,9 @@ def df_single_contrast_all_models(
         columns = [
             opt.plotnames[0], opt.plotnames[1], 
             opt.plotnames[2], opt.plotnames[3], 
-            contrast
+            task
             ]
-        sort_by = contrast
+        sort_by = task
     
     
     with torch.no_grad():
@@ -434,7 +320,7 @@ def df_single_contrast_all_models(
             # load model
             the_model.load_state_dict(torch.load(
                 model_filepath, 
-                map_location = opt.device,
+                map_location = opt.device[0],
                 )
             )
             the_model.eval()
@@ -446,16 +332,16 @@ def df_single_contrast_all_models(
             #test_dloader[2] contains number of slices per mri
             for idx_mri, nsl in enumerate(test_dloader[2]): 
                 for idx_slice in range(nsl):
-                    kspace, mask, esp_maps, im_fs, contrast = next(test_dataset)
-                    contrast = contrast[0]
-                    kspace, mask = kspace.to(opt.device), mask.to(opt.device)
-                    esp_maps, im_fs = esp_maps.to(opt.device), im_fs.to(opt.device)
+                    kspace, mask, esp_maps, im_fs, task = next(test_dataset)
+                    task = task[0]
+                    kspace, mask = kspace.to(opt.device[0]), mask.to(opt.device[0])
+                    esp_maps, im_fs = esp_maps.to(opt.device[0]), im_fs.to(opt.device[0])
 
                     # forward pass
                     if 'STL' in model_filepath:
                         _, im_us = the_model(kspace, mask, esp_maps) 
                     elif 'MTL' in model_filepath:
-                        _, im_us, _ = the_model(kspace, mask, esp_maps, contrast)
+                        _, im_us, _ = the_model(kspace, mask, esp_maps, task)
                     else:
                         raise ValueError(
                             f'Could not go thru forward pass; could not find STL or MTL in {model_filepath}'
@@ -474,7 +360,7 @@ def df_single_contrast_all_models(
 
                     if opt.tensorboard and idx_slice % opt.savefreq == 0:
                         writer.add_figure(
-                            f'{model}/{contrast}/MRI_{idx_mri}', 
+                            f'{model}/{task}/MRI_{idx_mri}', 
                             plot_quadrant(im_fs, im_us),
                             global_step = idx_slice,
                         )
@@ -503,110 +389,39 @@ def df_single_contrast_all_models(
 
     return df
 
-def _get_model_filedir(dataset, opt, idx_experimentname):
-    # normally, we are in mixeddata case
-    if opt.mixeddata[idx_experimentname]:
-        # MTL (experimental)
-        if opt.blockstructures[idx_experimentname] != 'S':
-            model_filedir = os.path.join(
-                opt.modeldir,
-                f"{opt.experimentnames[idx_experimentname]}_" + \
-                # f"{'strat_' if opt.stratified[idx_experimentname] else ''}" + \
-                f"{opt.network[idx_experimentname]}" + \
-                f"{opt.blockstructures[idx_experimentname]}_" +\
-                f"{'_'.join(opt.datasets)}"
-            )
-
-        # STL mixed (control)
-        else:
-            model_filedir = os.path.join(
-                opt.modeldir,
-                f"{opt.experimentnames[idx_experimentname]}_" + \
-                f"{opt.network[idx_experimentname]}_" + \
-                f"{'_'.join(opt.datasets)}"
-            )
-
-    # only for STL where data are not mixed (control)
-    else:
-        model_filedir = os.path.join(
-            opt.modeldir,
-            f"{opt.experimentnames[idx_experimentname]}_" + \
-            f"{opt.network[idx_experimentname]}_" + \
-            f"{dataset}"
-        )
-    
-    if not os.path.isdir(model_filedir):
-        raise ValueError(f'{model_filedir} is not valid dir')
-
-    return model_filedir
-
-def _get_model_info(dataset, opt, idx_experimentname):
-
-    # figure out where to load saved weights from
-    model_filedir = _get_model_filedir(dataset, opt, idx_experimentname)
-
-
-    ### figure out which model skeleton to use ###
-    if 'STL' in opt.experimentnames[idx_experimentname]:
-        with torch.no_grad():
-            the_model = STL_VarNet(
-                num_cascades = opt.numblocks[idx_experimentname],
-                ).to(opt.device)
-                
-    elif 'MTL' in opt.experimentnames[idx_experimentname]:
-        ### remember to change the inputs manually
-        # v1
-        if opt.backcompat[idx_experimentname]:
-            with torch.no_grad():
-                the_model = MTL_VarNet_backcompat(
-                    datasets = opt.datasets,
-                    num_cascades = opt.numblocks[idx_experimentname],
-                    # begin_blocks = opt.beginblocks[idx_experimentname],
-                    shared_blocks = opt.sharedblocks[idx_experimentname],
-                    ).to(opt.device)
-        # v3
-        elif opt.backcompat[idx_experimentname]:
-            with torch.no_grad():
-                the_model = MTL_VarNet_backcompat(
-                    datasets = opt.datasets,
-                    blockstructures = interpret_blockstructures(
-                        opt.blockstructures[idx_experimentname]
-                        ),
-                    share_etas = opt.shareetas[idx_experimentname],
-                    ).to(opt.device)
-    
-        else:
-            with torch.no_grad():
-                the_model = MTL_VarNet(
-                    datasets = opt.datasets,
-                    blockstructures = interpret_blockstructures(
-                        opt.blockstructures[idx_experimentname]
-                        ),
-                    share_etas = opt.shareetas[idx_experimentname],
-                    ).to(opt.device)
-    
-    else:
-        raise ValueError(f'{opt.experimentnames[idx_experimentname]} not valid')
-    
-
-    return the_model, model_filedir
-
-
-
-
-
 
 def save_bokeh_plots(writer, opt):
+    """Iterates through datasets and experiments for inference plots.
+    
+    A wrapper for df_single_task_all_models. Saves interactive plots
+    at the user-defined directory (in opt.plotdir)
+
+    Parameters
+    ----------
+    writer : TensorBoard SummaryWriter
+        Contains directory to save logs.
+    opt : argparse ArgumentParser
+        Contains user-defined parameters. See help documentation above.
+
+    Returns
+    -------
+    None
+    
+    Notes
+    -----
+    This function is currently only suitable for two tasks.
+
+    """
     if opt.createplots:
         plots = _initialize_plots(opt)
         colormap = _initialize_colormap(opt)
 
 
-    # do one contrast at a time (two total contrasts)
+    # do one task at a time (two total tasks)
     for idx_dataset, dataset in enumerate(opt.datasets):
         basedir = os.path.join(opt.datadir, dataset)
 
-        # test loader for this one contrast
+        # test loader for this one task
         test_dloader = genDataLoader(
             [f'{basedir}/Test'],
             [0, 0],
@@ -627,8 +442,8 @@ def save_bokeh_plots(writer, opt):
                 )
             print(f'working on {dataset}, {model_filedir}') 
 
-            # get df for all ratios of a particular model, for a single contrast
-            df = df_single_contrast_all_models(
+            # get df for all ratios of a particular model, for a single task
+            df = df_single_task_all_models(
                 the_model, test_dloader, model_filedir, dataset, idx_experimentname, writer
             )
             
@@ -685,19 +500,247 @@ def save_bokeh_plots(writer, opt):
                 title = "Bokeh plot",
             )
 
-    return True
 
 
-# main
-log_dir = f"plots/{opt.plotdir}"
+"""
+=========== internal functions ============
+"""
 
-if opt.tensorboard:
-    writer_tensorboard = SummaryWriter(
-        log_dir = log_dir,
-        max_queue = 20,
-        flush_secs = 1,
-    )
-else:
-    writer_tensorboard = None
+def _initialize_plots(opt):
+    """Preliminary plot initialization / baselines
+    """
+    x_axis_label = f'% of total PDw-FS MR slices'
+
+    plots = [
+        bokeh.plotting.figure(
+            width = 1100,
+            height = 600,
+            x_axis_label = x_axis_label,
+            y_axis_label = opt.plotnames[i],
+            tooltips=[
+                (opt.plotnames[i], f"@{{{opt.plotnames[i]}}}"),
+                (f"% slices {opt.datasets[0]}", f"@{{{opt.datasets[0]}}}"),
+                (f"% slices {opt.datasets[1]}", f"@{{{opt.datasets[1]}}}"),
+                (f"% best run", f"@{{{opt.plotnames[i]}name}}"),
+            ],
+        ) for i in range(4) 
+    ]
+
+    if opt.showbaselines:
+        plots = _plot_baselines(plots, opt)
+
+    return plots
+
+def _initialize_colormap(opt):
+    """Colormap for different experiments / datasets.
+    """
+    _dataset_exps = [
+        f'{dataset} ~ {experimentname}' 
+        for dataset in opt.datasets 
+        for experimentname in opt.experimentnames
+        ]
+    colormap = {
+        dataset_exp : opt.colors[i]
+        for i, dataset_exp in enumerate(_dataset_exps)
+    }
+    return colormap
+
+
+def _plot_best(plots, opt):
+    """Plots the best experiment run.
+
+    The csv file must be created manually. It is helpful to first
+    create a plot with all relevant experiments, and use the interactive
+    tooltips to determine the best experimental run + relevant values.
+    """
+    for dataset in opt.datasets:
+        df = pd.read_csv(os.path.join(
+            opt.bestdir, f'summary_{dataset}.csv'
+            ))
+        df = df.drop('Unnamed: 0', axis = 1)
+        df = df.sort_values(by=[f'{opt.datasets[0]}'])
+        x_data = opt.datasets[0]
+        for idx_plot in range(4):
+            # we might not want to plot best run for each metric;
+            # bokeh breaks when plotting NaN, so filter those out first
+            if not df[opt.plotnames[idx_plot]].isnull().values.any():
+                # Add glyphs
+                plots[idx_plot].square(
+                    source = df,
+                    x = x_data,
+                    y = opt.plotnames[idx_plot],
+                    legend_label = f'{dataset} ~ best_MTL',
+                    color = opt.bestruncolor,
+                    line_width = 1.5,
+                    size = 10,
+                    fill_color = None,
+
+                )
+
+                plots[idx_plot].line(
+                    source = df,
+                    x = x_data,
+                    y = opt.plotnames[idx_plot],
+                    legend_label = f'{dataset} ~ best_MTL',
+                    line_color = opt.bestruncolor,
+                    line_width = 2,
+                )
+    return plots
     
-save_bokeh_plots(writer_tensorboard, opt)
+
+def _plot_baselines(plots, opt):
+    """Plots relevant STL baselines.
+    
+    The csv files must be precalculated.
+    """
+    # name paths
+    #scarce
+    scarce_path = Path(os.path.join(
+        opt.modeldir, 
+        # 'STL_baselines',
+        f"STL_{opt.baselinenetwork}_{'_'.join(opt.datasets)}", 
+        f'summary_{opt.datasets[0]}.csv',
+    ))
+
+    # abundant
+    abundant_path = Path(os.path.join(
+        opt.modeldir,
+        # 'STL_baselines',
+        f'STL_nojoint_{opt.baselinenetwork}_{opt.datasets[1]}', 
+        f'summary_{opt.datasets[1]}.csv'
+    ))
+
+    if scarce_path.is_file() and abundant_path.is_file():
+        # read in dfs
+        scarce_df = pd.read_csv(scarce_path)
+        scarce_df = scarce_df.drop('Unnamed: 0', axis = 1)
+        scarce_df = scarce_df.sort_values(by=[f'{opt.datasets[0]}'])
+        abundant_df = pd.read_csv(abundant_path)
+        abundant_df = abundant_df.drop('Unnamed: 0', axis = 1)
+        abundant_df = abundant_df.sort_values(by=[f'{opt.datasets[1]}'])
+
+        for idx_plot in range(4):
+            # scarce
+            plots[idx_plot].line(
+                source = scarce_df,
+                x = opt.datasets[0],
+                y = opt.plotnames[idx_plot],
+                legend_label = f'STL baseline {opt.datasets[0]}',
+                color = 'black',
+                line_width = 1.5,
+                line_dash = [2, 2]
+            )
+
+            # abundant
+            abundant_value = abundant_df.loc[
+                abundant_df[opt.datasets[1]] == max(abundant_df[opt.datasets[1]]), 
+                opt.plotnames[idx_plot]
+            ]
+
+            plots[idx_plot].line(
+                x = [0, 1],
+                y = [abundant_value, abundant_value],
+                legend_label = f'STL baseline {opt.datasets[1]}',
+                color = 'black',
+                line_width = 1.5,
+                line_dash = 'dashdot'
+            )
+        print ('successfully plotted baselines')
+    else:
+        print (f'    one or both of {scarce_path}, {abundant_path} does not exist; no baselines')
+    return plots
+
+
+def _get_model_filedir(dataset, opt, idx_experimentname):
+    """Retrieves directory with model weights
+    """
+    # normally, we are in mixeddata case
+    if opt.mixeddata[idx_experimentname]:
+        # MTL (experimental)
+        if opt.blockstructures[idx_experimentname] != 'S':
+            model_filedir = os.path.join(
+                opt.modeldir,
+                f"{opt.experimentnames[idx_experimentname]}_" + \
+                # f"{'strat_' if opt.stratified[idx_experimentname] else ''}" + \
+                f"{opt.network[idx_experimentname]}" + \
+                f"{opt.blockstructures[idx_experimentname]}_" +\
+                f"{'_'.join(opt.datasets)}"
+            )
+
+        # STL mixed (control)
+        else:
+            model_filedir = os.path.join(
+                opt.modeldir,
+                f"{opt.experimentnames[idx_experimentname]}_" + \
+                f"{opt.network[idx_experimentname]}_" + \
+                f"{'_'.join(opt.datasets)}"
+            )
+
+    # only for STL where data are not mixed (control)
+    else:
+        model_filedir = os.path.join(
+            opt.modeldir,
+            f"{opt.experimentnames[idx_experimentname]}_" + \
+            f"{opt.network[idx_experimentname]}_" + \
+            f"{dataset}"
+        )
+    
+    if not os.path.isdir(model_filedir):
+        raise ValueError(f'{model_filedir} is not valid dir')
+
+    return model_filedir
+
+def _get_model_info(dataset, opt, idx_experimentname):
+    """Loads the model skeleton and returns directory with model weights
+    """
+
+    # figure out where to load saved weights from
+    model_filedir = _get_model_filedir(dataset, opt, idx_experimentname)
+
+
+    ### figure out which model skeleton to use ###
+    if 'STL' in opt.experimentnames[idx_experimentname]:
+        with torch.no_grad():
+            the_model = STL_VarNet(
+                num_cascades = opt.numblocks[idx_experimentname],
+                ).to(opt.device[0])
+                
+    elif 'MTL' in opt.experimentnames[idx_experimentname]:
+        ### remember to change the inputs manually
+        with torch.no_grad():
+            the_model = MTL_VarNet(
+                datasets = opt.datasets,
+                blockstructures = interpret_blockstructures(
+                    opt.blockstructures[idx_experimentname]
+                    ),
+                share_etas = opt.shareetas[idx_experimentname],
+                device = opt.device,
+                training = False,
+                )
+    
+    else:
+        raise ValueError(f'{opt.experimentnames[idx_experimentname]} not valid')
+    
+
+    return the_model, model_filedir
+
+
+"""
+=========== main function ============
+"""
+
+if __name__ == '__main__':
+
+    # define TensorBoard log directory
+    log_dir = f"plots/{opt.plotdir}"
+
+    if opt.tensorboard:
+        writer_tensorboard = SummaryWriter(
+            log_dir = log_dir,
+            max_queue = 20,
+            flush_secs = 1,
+        )
+    else:
+        writer_tensorboard = None
+        
+    save_bokeh_plots(writer_tensorboard, opt)

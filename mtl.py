@@ -1,3 +1,10 @@
+"""Docstring for mtl.py
+
+This is the user-facing module for MTL training.
+Run this module from the command line, and pass in the
+appropriate arguments to define the model and data.
+"""
+
 import argparse
 import json
 import os
@@ -40,9 +47,9 @@ parser.add_argument(
 )
 parser.add_argument(
     '--gradaverage', default=0, type=int,
-    help='''if true, will average accumulated grads before optimizer.step
+    help="""if true, will average accumulated grads before optimizer.step
     if false, gradaccumulation will occur without averaging (i.e. no hooks)
-    value does not matter if gradaccumulation is equal to 1'''
+    value does not matter if gradaccumulation is equal to 1"""
 )
 
 
@@ -55,7 +62,7 @@ parser.add_argument(
         'split', 'attenshare', 'split', 'split',
         'mhushare', 'mhushare', 'attenshare', 'attenshare',
     ],
-    help='''explicit list of what each block will be;
+    help="""explicit list of what each block will be;
     defines total number of blocks;
     possible options = [
         trueshare, mhushare, attenshare, split
@@ -64,7 +71,7 @@ parser.add_argument(
     mhushare block shares encoder but not decoder;
     attenshare block has global shared unet, atten at all levels
     split does not share anything
-    '''
+    """
 )
 
 parser.add_argument(
@@ -74,9 +81,9 @@ parser.add_argument(
 
 parser.add_argument(
     '--shareetas', default=1, type=int,
-    help='''if false, there will be len(opt.datasets) number of etas for each unrolled block
+    help="""if false, there will be len(opt.datasets) number of etas for each unrolled block
     if true, there will be 1 eta for each unrolled block
-    '''
+    """
     )
 
 parser.add_argument(
@@ -109,7 +116,7 @@ parser.add_argument(
 
 parser.add_argument(
     '--scarcities', default=[0, 1, 2, 3], type=int, nargs='+',
-    help='number of samples in second contrast will be decreased by 1/2^N; i.e. 0 1 2'
+    help='number of samples in second task will be decreased by 1/2^N; i.e. 0 1 2'
     )
 
 parser.add_argument(
@@ -125,24 +132,21 @@ parser.add_argument(
 # data loader properties
 parser.add_argument(
     '--stratified', default=0, type=int,
-    help='''if true, stratifies the dataloader'''
+    help="""if true, stratifies the dataloader"""
 )
 
 parser.add_argument(
     '--stratifymethod', default='upsample',
-    help='''
+    help="""
     one of [upsample, downsample] for
     scarce, abundant dataset, respectively
-    does not matter if --stratified is false'''
+    does not matter if --stratified is false"""
 )
 
 parser.add_argument(
     '--numworkers', default=16, type=int,
     help='number of workers for PyTorch dataloader'
 )
-
-
-
 
 # save / display data
 parser.add_argument(
@@ -151,7 +155,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '--verbose', default=1, type=int,
-    help='''if true, prints to console average loss / metrics'''
+    help="""if true, prints to console average loss / metrics"""
 )
 parser.add_argument(
     '--tensorboard', default=1, type=int,
@@ -172,26 +176,32 @@ assert opt.gradaccumulation > 0; 'opt.gradaccumulation must be greater than 0'
 
 assert opt.weighting in ['naive', 'uncert', 'dwa'], f'weighting method not yet supported'
 
-"""
-=========== run/model name ============
-"""
+
 
 """
 =========== Runs ============
 """    
 
-# datasets
-run_name = f"runs/{opt.experimentname}_" + \
-    f"{'strat_' if opt.stratified else ''}" + \
-    f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
-model_name = f"models/{opt.experimentname}_" + \
-    f"{'strat_' if opt.stratified else ''}" + \
-    f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
-if not os.path.isdir(model_name):
-    os.makedirs(model_name)
-writer_tensorboard = SummaryWriter(log_dir = run_name)
-
 def main(opt):
+    """Calls wrappers.py for training
+
+    Creates data loaders, initializes model, and defines learning parameters.
+    Trains MTL from command line.
+
+    Parameters
+    ----------
+    opt : argparse.ArgumentParser
+        Refer to help documentation above.
+    
+    Returns
+    -------
+    None
+
+    See Also
+    --------
+    multi_task_trainer from wrappers.py
+    
+    """
     basedirs = [
         os.path.join(opt.datadir, dataset)
         for dataset in opt.datasets
@@ -237,18 +247,32 @@ def main(opt):
             optimizer, scheduler,
             opt,
         )
-        
-# write json files to models and runs directories; for future reference
-with open(
-    os.path.join(run_name,'parameters.json'), 'w'
-    ) as parameter_file:
-   json.dump(vars(opt), parameter_file)     
 
-with open(
-    os.path.join(model_name,'parameters.json'), 'w'
-    ) as parameter_file:
-   json.dump(vars(opt), parameter_file)   
 
-main(opt)
-writer_tensorboard.flush()
-writer_tensorboard.close()
+if __name__ == '__main__':
+    # run / model name
+    run_name = f"runs/{opt.experimentname}_" + \
+        f"{'strat_' if opt.stratified else ''}" + \
+        f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
+    model_name = f"models/{opt.experimentname}_" + \
+        f"{'strat_' if opt.stratified else ''}" + \
+        f"{opt.network}{label_blockstructures(opt.blockstructures)}_{'_'.join(opt.datasets)}/"
+    if not os.path.isdir(model_name):
+        os.makedirs(model_name)
+    writer_tensorboard = SummaryWriter(log_dir = run_name)
+
+
+    # write json files to models and runs directories; for future reference
+    with open(
+        os.path.join(run_name,'parameters.json'), 'w'
+        ) as parameter_file:
+        json.dump(vars(opt), parameter_file)     
+
+    with open(
+        os.path.join(model_name,'parameters.json'), 'w'
+        ) as parameter_file:
+        json.dump(vars(opt), parameter_file)   
+
+    main(opt)
+    writer_tensorboard.flush()
+    writer_tensorboard.close()

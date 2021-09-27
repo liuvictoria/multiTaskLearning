@@ -1,22 +1,55 @@
+"""Docstring for att_unet.py
+
+Attentional U-Net implementation for unrolled block network.
+
 """
-based on code from fastMRI
-https://github.com/facebookresearch/fastMRI/tree/master/fastmri/models
-"""
+
+import numpy as np
+from typing import List
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-import numpy as np
-
-from typing import List
-
 
 class AttUnet(nn.Module):
-    """
-    PyTorch implementation of a U-Net model with attention.
-    attention in downsampling, bottleneck, and upsampling
-    number of attentional gates = number of contrasts
+    """PyTorch implementation of a U-Net model with attention.
+
+    An image goes through the shared and task-attentional layers.
+    Attention is in downsampling, bottleneck, and upsampling.
+    The number of attentional gates = number of tasks.
+
+    Initialization Parameters
+    -------------------------
+    in_chans: int
+        Number of channels in the input to the U-Net model.
+    out_chans: int
+        Number of channels in the output to the U-Net model.
+    chans: int, default 32
+        Number of output channels of the first convolution layer.
+    num_pool_layers: int, default 4
+        Number of down-sampling and up-sampling layers.
+    drop_prob: float, default 0.0
+        Dropout probability.
+    decoder_heads: int, default None
+        Number of tasks in dataset
+
+    Forward Parameters
+    ------------------
+    image: tensor
+        4D tensor of shape `(N, in_chans, H, W)`
+    int_task: int
+        i.e. 0 for div_coronal_pd_fs, 1 for div_coronal_pd
+
+    Returns
+    -------
+    4D tensor of shape `(N, out_chans, H, W)`
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/tree/master/fastmri/models
+    https://github.com/lorenmt/mtan
+
     """
 
     def __init__(
@@ -26,17 +59,8 @@ class AttUnet(nn.Module):
         chans: int = 32,
         num_pool_layers: int = 4,
         drop_prob: float = 0.0,
-        decoder_heads = None,
+        decoder_heads: int = None,
     ):
-        """
-        Args:
-            in_chans: Number of channels in the input to the U-Net model.
-            out_chans: Number of channels in the output to the U-Net model.
-            chans: Number of output channels of the first convolution layer.
-            num_pool_layers: Number of down-sampling and up-sampling layers.
-            drop_prob: Dropout probability.
-            decoder_heads: number of contrasts in dataset
-        """
         super().__init__()
 
         # parameters / sizes
@@ -193,31 +217,19 @@ class AttUnet(nn.Module):
                 )
             )
 
-            
-        
-
 
     def forward(
         self, 
         image: torch.Tensor,
-        int_contrast: int,
+        int_task: int,
         ) -> torch.Tensor:
-        """
-        Args:
-            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
-            int_contrast: i.e. 0 for div_coronal_pd_fs, 1 for div_coronal_pd
-        Returns:
-            Output tensor of shape `(N, out_chans, H, W)`.
-        """
         # create lists to hold intermediate values
-
         #### global ####
         g_avgpool, g_unpool = (
             np.zeros([self.num_pool_layers])
             for _ in range(2)
         )
     
-
         # down/up-sample have structure [idx_layer][idx_intermediate]
         # 2 intermediate tasks
         g_downsample, g_upsample = (
@@ -252,7 +264,6 @@ class AttUnet(nn.Module):
 
         # for skip connections
         stack = []
-
 
         # actual forward
 
@@ -318,11 +329,11 @@ class AttUnet(nn.Module):
         for idx_layer in range(self.num_pool_layers):
             # if first layer, no merge step
             if idx_layer == 0:
-                atten_downsample[idx_layer][0] = self.downsample_att[int_contrast][idx_layer](
+                atten_downsample[idx_layer][0] = self.downsample_att[int_task][idx_layer](
                     g_downsample[idx_layer][0]
                 )
             else:
-                atten_downsample[idx_layer][0] = self.downsample_att[int_contrast][idx_layer](
+                atten_downsample[idx_layer][0] = self.downsample_att[int_task][idx_layer](
                     # merge att and global
                     torch.cat(
                         [g_downsample[idx_layer][0], atten_downsample[idx_layer - 1][2]],
@@ -338,7 +349,7 @@ class AttUnet(nn.Module):
                 )
         
         # bottleneck
-        atten_bottleneck[0] = self.bottleneck_att[int_contrast](
+        atten_bottleneck[0] = self.bottleneck_att[int_task](
             # merge att and global
             torch.cat(
                 (g_bottleneck[0], atten_downsample[-1][-1]),
@@ -363,7 +374,7 @@ class AttUnet(nn.Module):
                     atten_upsample[idx_layer - 1][-1]
                 )
             
-            atten_upsample[idx_layer][1] = self.upsample_att[int_contrast][idx_layer](
+            atten_upsample[idx_layer][1] = self.upsample_att[int_task][idx_layer](
                 torch.cat(
                     (g_upsample[idx_layer][0], atten_upsample[idx_layer][0]),
                     dim=1,
@@ -377,39 +388,44 @@ class AttUnet(nn.Module):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class ConvBlock(nn.Module):
-    """
-    A Convolutional Block that consists of two convolution layers each followed by
+    """A Convolutional Block.
+    
+    Consists of two convolution layers each followed by
     instance normalization, LeakyReLU activation and dropout.
+
+    Initialization Parameters
+    -------------------------
+    in_chans: int
+        Number of channels in the input
+    out_chans: int
+        Number of channels in the output
+    drop_prob: float
+        Dropout probability
+
+    Forward Parameters
+    ------------------
+    image: tensor
+        Input 4D tensor of shape `(N, in_chans, H, W)`
+
+    Attributes
+    ----------
+    self.layers : nn.Sequential
+        Conv2d, InstanceNorm2d, LeakyReLu
+
+    Returns
+    -------
+    self.layers(image) : tensor
+        4D tensor of shape `(N, out_chans, H, W)`
+
+    Notes
+    -----
+    Differs from fastmri unet ConvBlock in that there is only one 'block'
+
     """
 
     def __init__(self, in_chans: int, out_chans: int, drop_prob: float):
-        """
-        Args:
-            in_chans: Number of channels in the input.
-            out_chans: Number of channels in the output.
-            drop_prob: Dropout probability.
-        Differs from fastmri unet ConvBlock in that there is only one "block"
-        """
+
         super().__init__()
 
         self.in_chans = in_chans
@@ -424,27 +440,39 @@ class ConvBlock(nn.Module):
         )
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
-        Returns:
-            Output tensor of shape `(N, out_chans, H, W)`.
-        """
         return self.layers(image)
 
 
 class TransposeConvBlock(nn.Module):
-    """
-    A Transpose Convolutional Block that consists of one convolution transpose
+    """A Transpose Convolutional Block. 
+    Consists of one convolution transpose
     layers followed by instance normalization and LeakyReLU activation.
+
+    Initialization Parameters
+    -------------------------
+    in_chans: int
+        Number of channels in the input
+    out_chans: int
+        Number of channels in the output
+
+    Forward Parameters
+    ------------------
+    image: tensor
+        4D tensor of shape `(N, in_chans, H, W)`
+    
+    Attributes
+    ----------
+    self.layers : nn.Sequential
+        convTranspose2d, InstanceNorm2d, LeakyReLu
+
+    Returns
+    -------
+    self.layers(image) : tensor
+        4D tensor of shape `(N, out_chans, H*2, W*2)`
+
     """
 
     def __init__(self, in_chans: int, out_chans: int):
-        """
-        Args:
-            in_chans: Number of channels in the input.
-            out_chans: Number of channels in the output.
-        """
         super().__init__()
 
         self.in_chans = in_chans
@@ -459,30 +487,41 @@ class TransposeConvBlock(nn.Module):
         )
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
-        Returns:
-            Output tensor of shape `(N, out_chans, H*2, W*2)`.
-        """
         image = image.clone()
         return self.layers(image)
 
 
 class AttBlock(nn.Module):
-    """
-    attentional block 
-    1x1 conv, Norm, ReLU
-    1x1 conv, Norom, Sigmoid
+    """An Attentional Convolutional Block. 
+        
+    Contains 1x1 conv, Norm, ReLu
+
+    Initialization Parameters
+    -------------------------
+    in_chans: int
+        Number of channels in the input
+    out_chans: int
+        Number of channels in the output
+
+    Forward Parameters
+    ------------------
+    image: tensor
+        4D tensor of shape `(N, in_chans, H, W)`
+    
+    Attributes
+    ----------
+    self.layers : nn.Sequential
+        1x1 Conv2d, InstanceNorm2d, LeakyReLu
+        1x2 Conv2d, InstanceNorm2d, Sigmoid
+
+    Returns
+    -------
+    self.layers(image) : tensor
+        4D tensor of shape `(N, out_chans, H, W)`
+
     """
 
     def __init__(self, in_chans: int, out_chans: int):
-        """
-        Args:
-            in_chans: Number of channels in the input.
-            chans: Number of channels after first layter
-            out_chans: Number of channels in the output.
-        """
         super().__init__()
 
         self.in_chans = in_chans
@@ -498,11 +537,5 @@ class AttBlock(nn.Module):
         )
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            image: Input 4D tensor of shape `(N, in_chans, H, W)`.
-        Returns:
-            Output tensor of shape `(N, out_chans, H, W)`.
-        """
         image = image.clone()
         return self.layers(image)

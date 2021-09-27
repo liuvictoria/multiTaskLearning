@@ -1,6 +1,7 @@
-"""
-code modified from fastMRI
-https://github.com/facebookresearch/fastMRI/tree/master/fastmri/models
+"""Docstring for varnet.py
+
+Normalized U-Net implemetnation for unrolled block network.
+
 """
 
 import math
@@ -12,15 +13,48 @@ import torch.nn as nn
 import torch.nn.functional as F
 from fastmri.data import transforms
 
-from fastmri_unet import MHUnet
-from fastmri_att_unet import AttUnet
+from unet import MHUnet
+from att_unet import AttUnet
 
 class NormUnet(nn.Module):
-    """
-    Normalized U-Net model.
+    """PyTorch implementation of a Normalized U-Net model.
+
     This is the same as a regular U-Net, but with normalization applied to the
     input before the U-Net. This keeps the values more numerically stable
     during training.
+
+    Initialization Parameters
+    -------------------------
+    chans : int
+        Number of output channels of the first convolution layer.
+    num_pools : int
+        Number of down-sampling and up-sampling layers.
+    in_chans : int
+        Number of channels in the input to the U-Net model.
+    out_chans : int
+        Number of channels in the output to the U-Net model.
+    drop_prob : float
+        Dropout probability.
+    which_unet : str
+        One of [trueshare, mhushare, attenshare, split]
+    task_count : int
+        Number of dataset tasks
+
+    Forward Parameters
+    ------------------
+    image : tensor
+        4D tensor
+    int_task : int
+        i.e. 0 for div_coronal_pd_fs, 1 for div_coronal_pd
+
+    Returns
+    -------
+    4D tensor
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/tree/master/fastmri/models
+
     """
 
     def __init__(
@@ -31,25 +65,16 @@ class NormUnet(nn.Module):
         out_chans: int = 2,
         drop_prob: float = 0.0,
         which_unet: str = 'user input required',
-        contrast_count: int = None,
+        task_count: int = None,
     ):
-        """
-        Args:
-            chans: Number of output channels of the first convolution layer.
-            num_pools: Number of down-sampling and up-sampling layers.
-            in_chans: Number of channels in the input to the U-Net model.
-            out_chans: Number of channels in the output to the U-Net model.
-            drop_prob: Dropout probability.
-            which_unet: one of [Unet, MHUnet] (AttUnet may be coming soon)
-            contrast_count: number of dataset contrasts
-        """
+ 
         super().__init__()
         assert which_unet in ['trueshare', 'mhushare', 'attenshare', 'split'], "variable which_unet not supported"
         if which_unet == 'trueshare' or which_unet == 'split':
             decoder_heads = 1
         elif which_unet == 'mhushare' or which_unet == 'attenshare':
-            assert contrast_count > 1, 'no. contrasts must be int > 1 for mhu or att unet'
-            decoder_heads = contrast_count
+            assert task_count > 1, 'no. tasks must be int > 1 for mhu or att unet'
+            decoder_heads = task_count
 
         # attentional network is a separate module
         if which_unet == 'attenshare':
@@ -106,6 +131,10 @@ class NormUnet(nn.Module):
     def pad(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, Tuple[List[int], List[int], int, int]]:
+        """Ensure that dimensions match after rounding errors incurred
+        during upsampling/downsampling by padding.
+        
+        """
         _, _, h, w = x.shape
         w_mult = ((w - 1) | 15) + 1
         h_mult = ((h - 1) | 15) + 1
@@ -132,7 +161,7 @@ class NormUnet(nn.Module):
     def forward(
         self, 
         x: torch.Tensor,
-        int_contrast: int = 0,
+        int_task: int = 0,
         ) -> torch.Tensor:
         if not x.shape[-1] == 2:
             raise ValueError("Last dimension must be 2 for complex.")
@@ -143,7 +172,7 @@ class NormUnet(nn.Module):
         x, pad_sizes = self.pad(x)
 
         x = self.unet(
-            x, int_contrast = int_contrast,
+            x, int_task = int_task,
             )
 
         # get shapes back and unnormalize

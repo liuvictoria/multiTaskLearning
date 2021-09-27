@@ -1,7 +1,17 @@
-'''
-sometimes runs freeze, and tensorboard looks bad with multiple unfinished runs overlaid
-delete those unfinished runs
-'''
+""" Docstring for the deleteDuplicateRuns.py module.
+
+Sometimes a run freezes before completion.
+Although models are overwritten in a future completed run,
+the exploratory tensorboard looks bad with unfinished runs overlaid.
+
+Use this script to delete those unfinished runs.
+All runs except the largest-file-size run are sent to trash.
+
+Run this script from the command line with the appropriate 
+runnames and and directory as command line arguments.
+The program prints which runs are sent to trash.
+
+"""
 
 import os
 from send2trash import send2trash
@@ -15,14 +25,14 @@ parser = argparse.ArgumentParser(
 # which runs to investigate for prematurely stopped runs
 parser.add_argument(
     '--runnames', nargs = '+',
-    help='''which runs to investigate for prematurely stopped runs; 
-        i.e. MTL_dwa_varnet0:10_div_coronal_pd_fs_div_coronal_pd''',
+    help="""which runs to investigate for prematurely stopped runs; 
+        i.e. MTL_dwa_varnet0:10_div_coronal_pd_fs_div_coronal_pd""",
     required = True,
 )
 
 parser.add_argument(
     '--rundir',
-    help='''directory of runs''',
+    help="""directory of runs""",
     required = True,
 )
 

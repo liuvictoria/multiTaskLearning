@@ -1,3 +1,12 @@
+"""Docstring for wrappers.py
+
+STL and MTL training wrappers. Takes care of:
+- feeding data to network
+- gradient accumulation (optional), back-prop, and weight update
+- calculating metrics
+- drawing validation images to Tensorboard
+
+"""
 import os
 import copy
 import numpy as np
@@ -25,8 +34,50 @@ def single_task_trainer(
     optimizer, scheduler,
     opt
 ):
+    """Wrapper for single task learning training.
+
+    Takes care of:
+    - saving best validation model
+    - forward pass and backward propagation
+    - gradient accumulation / averaging, is specified in opt
+    - calculating and recording metrics
+    - plotting validation iamges
+    - displaying averaged metrics on terminal
+
+    Called in stl.py
+
+    Parameters
+    ----------
+    train_loader : genDataLoader
+        Contains slices from Train dataset. Slices shuffled.
+    val_loader : genDataLoader
+        Contains slices from Val dataset. Slices not shuffled.
+    train_ratios : dict
+        Keys are tasks. Values are the number of slices for each task.
+        Even tho this is STL, we keep track of tasks for calculating
+        individual task metrics. The loss func is not affected by task.
+    val_ratios : dict
+        Keys are tasks. Values are the number of slices for each task
+    single_task_model : model-like object
+        Weights are not loaded
+    device : str
+        Name of single GPU
+    writer : tensorboard SummaryWriter
+        Contains log directory information for tensorboard
+    optimizer : torch.optim.<optimizer>
+        usually Adam
+    scheduler : torch.optim.<scheduler>
+        usually StepLR
+    opt : argparse.ArgumentParser
+        Refer to help documentation in stl.py
+
+    Returns
+    -------
+    None
+
+    """
     # convenience
-    contrast_count = len(opt.datasets)
+    task_count = len(opt.datasets)
     train_batch = len(train_loader)
     val_batch = len(val_loader)
 
@@ -40,8 +91,8 @@ def single_task_trainer(
     for epoch in range(opt.epochs):
         # contains info for single epoch
         cost = {
-            contrast : np.zeros(8)
-            for contrast in opt.datasets
+            task : np.zeros(8)
+            for task in opt.datasets
         }
         cost['overall'] = np.zeros(8)
 
@@ -52,8 +103,8 @@ def single_task_trainer(
         # grad accumulation
         optimizer.zero_grad() 
 
-        for kspace, mask, esp, im_fs, contrast in train_dataset:
-            contrast = contrast[0] # torch dataset loader returns as tuple
+        for kspace, mask, esp, im_fs, task in train_dataset:
+            task = task[0] # torch dataset loader returns as tuple
             kspace, mask = kspace.to(device), mask.to(device)
             esp, im_fs = esp.to(device), im_fs.to(device)
 
@@ -77,16 +128,16 @@ def single_task_trainer(
                 optimizer.step()
                 optimizer.zero_grad()
                 
-                # reset contrast batches
+                # reset task batches
                 batch_count = 0 
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now
-            cost[contrast][0] += loss.item()
+            cost[task][0] += loss.item()
 
             # ssim, psnr, nrmse
             for j in range(3):
-                cost[contrast][j + 1] += metrics(im_fs, im_us)[j]
+                cost[task][j + 1] += metrics(im_fs, im_us)[j]
 
 
         # get losses and metrics for each epoch
@@ -96,8 +147,8 @@ def single_task_trainer(
             # validation data
             val_dataset = iter(val_loader)
             for val_idx, val_data in enumerate(val_dataset):
-                kspace, mask, esp, im_fs, contrast = val_data
-                contrast = contrast[0]
+                kspace, mask, esp, im_fs, task = val_data
+                task = task[0]
                 kspace, mask = kspace.to(device), mask.to(device)
                 esp, im_fs = esp.to(device), im_fs.to(device)
 
@@ -108,34 +159,34 @@ def single_task_trainer(
 
                 # losses and metrics are averaged over epoch at the end
                 # L1 loss for now
-                cost[contrast][4] += loss.item()
+                cost[task][4] += loss.item()
 
                 # ssim, psnr, nrmse
                 for j in range(3):
-                    cost[contrast][j + 5] += metrics(im_fs, im_us)[j]
+                    cost[task][j + 5] += metrics(im_fs, im_us)[j]
 
                # visualize reconstruction every few epochs
                 if opt.tensorboard and epoch % opt.savefreq == 0: ###opt###
-                    # if single contrast, only visualize 17th slice
+                    # if single task, only visualize 17th slice
                     if (
-                        val_idx == 17 and contrast == opt.bothdatasets[0] or
-                        val_idx == val_batch - 17 and contrast == opt.bothdatasets[1]
+                        val_idx == 17 and task == opt.bothdatasets[0] or
+                        val_idx == val_batch - 17 and task == opt.bothdatasets[1]
                     ):
                         writer.add_figure(
-                            f'{ratio}/{contrast}',
+                            f'{ratio}/{task}',
                             plot_quadrant(im_fs, im_us),
                             epoch, close = True,
                         )
 
         # update overall
-        cost['overall'] = np.sum([cost[contrast] for contrast in opt.datasets], axis = 0)
+        cost['overall'] = np.sum([cost[task] for task in opt.datasets], axis = 0)
         cost["overall"][:4] /= train_batch
         cost["overall"][4:] /= val_batch
 
         # average out
-        for contrast in opt.datasets:
-            cost[contrast][:4] /= train_ratios[contrast]
-            cost[contrast][4:] /= val_ratios[contrast]
+        for task in opt.datasets:
+            cost[task][:4] /= train_ratios[task]
+            cost[task][4:] /= val_ratios[task]
 
 
 
@@ -153,12 +204,12 @@ def single_task_trainer(
         scheduler.step()
 
         if opt.verbose:
-            print(f'''
+            print(f"""
             >Epoch: {epoch + 1:04d}
             TRAIN: loss {cost['overall'][0]:.4f} | ssim {cost['overall'][1]:.4f} | psnr {cost['overall'][2]:.4f} | nrmse {cost['overall'][3]:.4f}
             VAL: loss {cost['overall'][4]:.4f} | ssim {cost['overall'][5]:.4f} | psnr {cost['overall'][6]:.4f} | nrmse {cost['overall'][7]:.4f}
 
-            ''')
+            """)
 
         # write to tensorboard
         ###opt###
@@ -175,17 +226,19 @@ def single_task_trainer(
 """
 
 def _get_naive_weights(train_ratios, opt):
+    """Get weights based on inverse proportion to dataset size
+    """
     if opt.stratified:
         return {
-            contrast : 1
-            for contrast in train_ratios.keys()
+            task : 1
+            for task in train_ratios.keys()
         }
     total_slices = sum(train_ratios.values())
 
     # balance weights if not stratified; smaller datasets get larger weights
     naive_weights = {
-        contrast : len(train_ratios) * (total_slices - train_ratios[contrast]) / total_slices
-        for contrast in train_ratios.keys()
+        task : len(train_ratios) * (total_slices - train_ratios[task]) / total_slices
+        for task in train_ratios.keys()
     }
     return naive_weights
 
@@ -204,12 +257,50 @@ def multi_task_trainer(
     optimizer, scheduler,
     opt
 ):
-    
+    """Wrapper for multi task learning training.
+
+    Takes care of:
+    - loss weighting (naive, DWA, uncert)
+    - saving best validation model
+    - forward pass and backward propagation
+    - gradient accumulation / averaging, is specified in opt
+    - calculating and recording metrics
+    - plotting validation iamges
+    - displaying averaged metrics on terminal
+
+    Called in mtl.py
+
+    Parameters
+    ----------
+    train_loader : genDataLoader
+        Contains slices from Train dataset. Slices shuffled.
+    val_loader : genDataLoader
+        Contains slices from Val dataset. Slices not shuffled.
+    train_ratios : dict
+        Keys are tasks. Values are the number of slices for each task.
+    val_ratios : dict
+        Keys are tasks. Values are the number of slices for each task
+    multi_task_model : model-like object
+        Weights are not loaded
+    writer : tensorboard SummaryWriter
+        Contains log directory information for tensorboard
+    optimizer : torch.optim.<optimizer>
+        usually Adam
+    scheduler : torch.optim.<scheduler>
+        usually StepLR
+    opt : argparse.ArgumentParser
+        Refer to help documentation in mtl.py
+
+    Returns
+    -------
+    None
+
+    """
     # naming (even if stratified, scarce / abundant ratio is preserved)
     ratio = f"N={'_N='.join(str(key) for key in train_ratios.values())}"
 
     # convenience
-    contrast_count = len(opt.datasets)
+    task_count = len(opt.datasets)
     train_batch = len(train_loader)
     val_batch = len(val_loader)
 
@@ -243,13 +334,13 @@ def multi_task_trainer(
                     for idx_dataset in range(len(opt.datasets))
                 ])
                 for idx_dataset, dataset in enumerate(opt.datasets):
-                    weights[dataset] = contrast_count * np.exp(w[idx_dataset] / opt.temp) / softmax_sum
+                    weights[dataset] = task_count * np.exp(w[idx_dataset] / opt.temp) / softmax_sum
     
 
         # contains info for current epoch:
         cost = {
-            contrast : np.zeros(8)
-            for contrast in opt.datasets
+            task : np.zeros(8)
+            for task in opt.datasets
         }
         cost['overall'] = np.zeros(8)
 
@@ -260,8 +351,8 @@ def multi_task_trainer(
         # grad accumulation
         optimizer.zero_grad() 
 
-        for kspace, mask, esp, im_fs, contrast in train_dataset:
-            contrast = contrast[0] # torch dataset loader returns as tuple
+        for kspace, mask, esp, im_fs, task in train_dataset:
+            task = task[0] # torch dataset loader returns as tuple
 
             # grad accumulation 
             iteration += 1
@@ -269,7 +360,7 @@ def multi_task_trainer(
 
             # forward; outputs on opt.device[0]
             _, im_us, logsigma = multi_task_model(
-                kspace, mask, esp, contrast,
+                kspace, mask, esp, task,
                 )
 
             # crop so im_us has same size as im_fs
@@ -279,15 +370,15 @@ def multi_task_trainer(
 
             # loss
             if opt.weighting == 'naive' or opt.weighting == 'dwa':
-                loss = weights[contrast] * criterion(im_fs, im_us)
+                loss = weights[task] * criterion(im_fs, im_us)
 
             elif opt.weighting == 'uncert':
-                idx_contrast = opt.datasets.index(contrast)
-                loss = 1 / (2 * torch.exp(logsigma[idx_contrast])) * \
+                idx_task = opt.datasets.index(task)
+                loss = 1 / (2 * torch.exp(logsigma[idx_task])) * \
                     criterion(im_fs, im_us) + \
-                        logsigma[idx_contrast] / 2
+                        logsigma[idx_task] / 2
                 # for plotting purposes
-                weights[contrast] = logsigma[idx_contrast]
+                weights[task] = logsigma[idx_task]
             
             # grad accumulation
             if opt.gradaverage:
@@ -300,15 +391,15 @@ def multi_task_trainer(
                 optimizer.step()
                 optimizer.zero_grad()
                 
-                # reset contrast batches
+                # reset task batches
                 batch_count = 0 
 
             # losses and metrics are averaged over epoch at the end
             # L1 loss for now
-            cost[contrast][0] += loss.item()
+            cost[task][0] += loss.item()
             # ssim, psnr, nrmse
             for j in range(3):
-                cost[contrast][j + 1] += metrics(im_fs, im_us)[j]
+                cost[task][j + 1] += metrics(im_fs, im_us)[j]
 
 
         # validation
@@ -318,12 +409,12 @@ def multi_task_trainer(
             # validation data
             val_dataset = iter(val_loader)
             for val_idx, val_data in enumerate(val_dataset):
-                kspace, mask, esp, im_fs, contrast = val_data
-                contrast = contrast[0]
+                kspace, mask, esp, im_fs, task = val_data
+                task = task[0]
 
                 # forward pass; outputs are on opt.device[0]
                 _, im_us, logsigma = multi_task_model(
-                    kspace, mask, esp, contrast,
+                    kspace, mask, esp, task,
                     ) 
 
                 # crop so im_us has same size as im_fs
@@ -334,35 +425,35 @@ def multi_task_trainer(
 
                 # losses and metrics are averaged over epoch at the end
                 # L1 loss for now
-                cost[contrast][4] += loss.item() 
+                cost[task][4] += loss.item() 
 
                 # ssim, psnr, nrmse
                 for j in range(3):
-                    cost[contrast][j + 5] += metrics(im_fs, im_us)[j]
+                    cost[task][j + 5] += metrics(im_fs, im_us)[j]
 
                # visualize reconstruction every few epochs
                 if opt.tensorboard and epoch % opt.savefreq == 0: ###opt###
-                    # if single contrast, only visualize 17th slice
+                    # if single task, only visualize 17th slice
                     if (val_idx == 17 or val_idx == val_batch - 17):
                         writer.add_figure(
-                            f'{ratio}/{contrast}',
+                            f'{ratio}/{task}',
                             plot_quadrant(im_fs, im_us),
                             epoch, close = True,
                         )
 
         # update overall
-        cost['overall'] = np.sum([cost[contrast] for contrast in opt.datasets], axis = 0)
+        cost['overall'] = np.sum([cost[task] for task in opt.datasets], axis = 0)
         cost["overall"][:4] /= train_batch
         cost["overall"][4:] /= val_batch
 
         # average out
-        for contrast in opt.datasets:
+        for task in opt.datasets:
             if opt.stratified:
                 # scarce / abundant have same effective sizes
-                cost[contrast][:4] /= train_batch / len(opt.datasets)
+                cost[task][:4] /= train_batch / len(opt.datasets)
             else:
-                cost[contrast][:4] /= train_ratios[contrast]
-            cost[contrast][4:] /= val_ratios[contrast]
+                cost[task][:4] /= train_ratios[task]
+            cost[task][4:] /= val_ratios[task]
 
 
 
@@ -382,12 +473,12 @@ def multi_task_trainer(
         scheduler.step()
 
         if opt.verbose:
-            print(f'''
+            print(f"""
             >EPOCH (full run-throughs of abundant dataset): {epoch + 1:04d}; ITERATION: {iteration}
             TRAIN: loss {cost['overall'][0]:.4f} | ssim {cost['overall'][1]:.4f} | psnr {cost['overall'][2]:.4f} | nrmse {cost['overall'][3]:.4f}
             VAL: loss {cost['overall'][4]:.4f} | ssim {cost['overall'][5]:.4f} | psnr {cost['overall'][6]:.4f} | nrmse {cost['overall'][7]:.4f}
 
-            ''')
+            """)
 
         # write to tensorboard
         ###opt###

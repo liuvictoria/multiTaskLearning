@@ -1,35 +1,62 @@
+"""Docstring for models.py
+
+Defines STL/MTL unrolled block structure and STL/MTL architectures
+"""
+
 from collections import Counter
+from typing import List
 import numpy as np
 
 import torch
 import torch.nn as nn
 
-from typing import List
-
 import fastmri
-from fastmri_varnet import NormUnet
 from fastmri.models.varnet import NormUnet as STLNormUnet
-from utils import Tensor_Hook, Module_Hook
+from varnet import NormUnet
 
 
 """
 =========== VARNET_BLOCK STL vs MTL============
-difference arises from two etas / need to pass in contrast for MTL
+difference between STL vs MTL block arises 
+from splitting of etas / need to pass in task for MTL
 """
 
 class VarNetBlockSTL(nn.Module):
-    """
+    """One unrolled block for STL.
+
     This model applies a combination of soft data consistency with the input
     model as a regularizer. A series of these blocks can be stacked to form
     the full variational network.
+
+    Initialization parameters
+    -------------------------
+    model : nn.Module
+        Fully convolutional network for regularization
+
+    Forward parameters
+    ------------------
+    current_kspace : tensor
+        Partially learned k-space from the previous unrolled block.
+    ref_kspace : tensor
+        Undersampled k-space input to the network
+        (this is the same for all unrolled blocks)
+    mask : tensor
+        0 / 1 mask for retrospectively undersampling k-space
+    sens_maps : tensor
+        ESPIRiT-estimated sensitivity maps
+
+    Returns
+    -------
+    tensor
+        Newly estimated k-space after this unrolled block
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/blob/main/fastmri/models
+
     """
 
     def __init__(self, model: nn.Module):
-        """
-        Args:
-            model: Module for "regularization" component of variational
-                network.
-        """
         super().__init__()
 
         self.model = model
@@ -37,9 +64,17 @@ class VarNetBlockSTL(nn.Module):
         
 
     def sens_expand(self, x: torch.Tensor, sens_maps: torch.Tensor) -> torch.Tensor:
+        """Expand single-channel image into multi-channel images
+
+        Uses estimated sensitivity maps.
+        """
         return fastmri.fft2c(fastmri.complex_mul(x, sens_maps)) # F*S operator
 
     def sens_reduce(self, x: torch.Tensor, sens_maps: torch.Tensor) -> torch.Tensor:
+        """Reduces multi-channel image into single-channel image for neural net
+
+        Uses estimated sensitivity maps.
+        """
         x = fastmri.ifft2c(x)
         return fastmri.complex_mul(x, fastmri.complex_conj(sens_maps)).sum(
             dim=1, keepdim=True
@@ -52,6 +87,7 @@ class VarNetBlockSTL(nn.Module):
         mask: torch.Tensor,
         sens_maps: torch.Tensor,
     ) -> torch.Tensor:
+
         mask = mask.bool()
         zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
         soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.eta
@@ -63,14 +99,55 @@ class VarNetBlockSTL(nn.Module):
         return current_kspace - soft_dc - model_term
 
 class VarNetBlockMTL(nn.Module):
-    """
+    """One unrolled block for STL.
+
     This model applies a combination of soft data consistency with the input
-    model as a regularizer. A series of these blocks can be stacked to form
-    the full variational network.
-    Adds 
+    model as a regularizer. A series of these blocks can be composed to form
+    the full MTL network.
+
+    Initialization parameters
+    -------------------------
+    model : nn.Module
+        Fully convolutional network for regularization
+    datasets : List[str]
+        List of task names
+    share_etas : bool
+        Whether or not share data consistency term amongst tasks
+    share_blocks : bool
+        Whether or not to share the entire block
+        attenshare / mhushare / split are all False.
+
+    Forward parameters
+    ------------------
+    current_kspace : tensor
+        Partially learned k-space from the previous unrolled block.
+    ref_kspace : tensor
+        Undersampled k-space input to the network
+        (this is the same for all unrolled blocks)
+    mask : tensor
+        0 / 1 mask for retrospectively undersampling k-space
+    sens_maps : tensor
+        ESPIRiT-estimated sensitivity maps
+    int_task : int
+        integer representation of task
+
+    Returns
+    -------
+    tensor
+        Newly estimated k-space after this unrolled block
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/blob/main/fastmri/models
+
     """
 
-    def __init__(self, model: nn.Module, datasets: List[str], share_etas: bool, share_blocks: bool = True):
+    def __init__(
+        self, model: nn.Module, 
+        datasets: List[str], 
+        share_etas: bool, 
+        share_blocks: bool = True
+        ):
         """
         Args:
             model: Module for "regularization" component of variational
@@ -106,26 +183,22 @@ class VarNetBlockMTL(nn.Module):
         ref_kspace: torch.Tensor,
         mask: torch.Tensor,
         sens_maps: torch.Tensor,
-        int_contrast: int,
+        int_task: int,
     ) -> torch.Tensor:
-        '''
-        note that int_contrast is not str, but rather int index of opt.datasets
-        this is implemented in the VarNet portion
-        '''
-        
+  
         mask = mask.bool()
         zero = torch.zeros(1, 1, 1, 1, 1).to(current_kspace)
 
         # dc eta
-        idx_eta = 0 if self.share_etas else int_contrast
+        idx_eta = 0 if self.share_etas else int_task
         soft_dc = torch.where(mask, current_kspace - ref_kspace, zero) * self.etas[idx_eta]
 
         # regularization step (i.e. UNet)
-        idx_model = 0 if self.share_blocks else int_contrast
+        idx_model = 0 if self.share_blocks else int_task
         model_term = self.sens_expand(
             self.model[idx_model](
                 self.sens_reduce(current_kspace, sens_maps),
-                int_contrast = int_contrast,
+                int_task = int_task,
                 ), 
                 sens_maps
         )
@@ -141,11 +214,40 @@ class VarNetBlockMTL(nn.Module):
     
 # now we can stack VarNetBlocks to make a unrolled VarNet (with 10 blocks)
 class STL_VarNet(nn.Module):
-    """
-    A full variational network model.
+    """Full variational STL network model.
 
     This model applies a combination of soft data consistency with a U-Net
     regularizer. To use non-U-Net regularizers, use VarNetBock.
+
+    Initialization Parameters
+    -------------------------
+    num_cascades : int
+        Number of cascades (i.e., layers) for variational network.
+    chans : int, default = 18
+        Number of channels for cascade U-Net.
+    pools : int, default = 4
+        Number of downsampling and upsampling layers for cascade U-Net.
+
+    Forward parameters
+    ------------------
+    masked_kspace : tensor
+        Undersampled k-space input to the network
+    mask : tensor
+        0 / 1 mask for retrospectively undersampling k-space
+    sens_maps : tensor
+        ESPIRiT-estimated sensitivity maps
+
+    Returns
+    -------
+    kspace_pred : tensor
+        predicted k-space; to be compared to ground truth
+    img_comb : tensor
+        reconstructed image using kspace_pred
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/blob/main/fastmri/models
+
     """
 
     def __init__(
@@ -181,155 +283,60 @@ class STL_VarNet(nn.Module):
 
 
 
-# """
-# =========== MTL_VarNet ============
-# """
-
-# class MTL_VarNet(nn.Module):
-#     """
-#     A full variational network model.
-
-#     This model applies a combination of soft data consistency with a U-Net
-#     regularizer. To use non-U-Net regularizers, use VarNetBock.
-#     """
-
-#     def __init__(
-#         self,
-#         datasets: list,
-#         blockstructures: list,
-#         share_etas: bool,
-#         chans: int = 18,
-#         pools: int = 4,
-        
-#     ):
-#         super().__init__()
-
-#         # inputs
-#         self.blockstructures = blockstructures
-#         self.datasets = datasets # datasets (i.e. div_coronal_pd_fs, div_coronal_pd)
-#         self.share_etas = share_etas
-
-#         # figure out how many blocks of each type:
-#         block_counts = Counter(self.blockstructures)
-
-#         self.trueshare = nn.ModuleList([
-#             VarNetBlockMTL(
-#                 NormUnet(chans, pools, which_unet = 'trueshare',), 
-#                 datasets,
-#                 share_etas = share_etas,
-#                 ) for _ in range(block_counts['trueshare'])
-#         ])
-        
-
-#         self.mhushare = nn.ModuleList([
-#             VarNetBlockMTL(
-#                 NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
-#                 datasets,
-#                 share_etas = share_etas,
-#                 ) for _ in range(block_counts['mhushare'])
-#         ])
-
-#         self.attenshare = nn.ModuleList([
-#             VarNetBlockMTL(
-#                 NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
-#                 datasets,
-#                 share_etas = share_etas,
-#                 ) for _ in range(block_counts['attenshare'])
-#         ])
-
-#         self.split_contrasts = nn.ModuleList()
-#         for idx_contrast, dataset in enumerate(datasets):
-#             self.split_contrasts.add_module(
-#                 f'splitblock_{idx_contrast}',
-#                 nn.ModuleList([
-#                 VarNetBlockMTL(
-#                     NormUnet(chans, pools, which_unet = 'split',), 
-#                     datasets,
-#                     share_etas = share_etas,
-#                     ) for _ in range(block_counts['split'])
-#             ])
-#             )
-
-#         # uncert (specifically 2 contrasts)
-#         self.logsigmas = nn.ParameterList(
-#             nn.Parameter(torch.FloatTensor([-0.5]))
-#             for _ in datasets
-#             )
-
-
-#     def forward(
-#         self,
-#         masked_kspace: torch.Tensor, 
-#         mask: torch.Tensor,
-#         esp_maps: torch.Tensor,
-#         contrast: str,
-#     ) -> torch.Tensor:
-  
-
-#         kspace_pred = masked_kspace.clone()
-
-#         # contrast int for the block to determine which eta / 
-#         try:
-#             int_contrast = self.datasets.index(contrast)
-#         except:
-#             raise ValueError(f'{contrast} is not in self.datasets')
-
-#         # make counter for each type of block
-#         counter = [0 for _ in range(4)] # currently four types of blocks
-
-#         # go thru the blocks (usually 12)
-#         for idx_structure, structure in enumerate(self.blockstructures):
-#             # print(f'on {idx_structure} block, {structure}')
-#             if structure == 'trueshare':
-#                 kspace_pred = self.trueshare[counter[0]](
-#                     kspace_pred, masked_kspace, mask, esp_maps, 
-#                     int_contrast = int_contrast,
-#                 )
-#                 counter[0] += 1
-
-#             elif structure == 'mhushare':
-#                 kspace_pred = self.mhushare[counter[1]](
-#                     kspace_pred, masked_kspace, mask, esp_maps, 
-#                     int_contrast = int_contrast,
-#                 )
-#                 counter[1] += 1
-
-#             elif structure == 'attenshare':
-#                 kspace_pred = self.attenshare[counter[2]](
-#                     kspace_pred, masked_kspace, mask, esp_maps, 
-#                     int_contrast = int_contrast,
-#                 )
-#                 counter[2] += 1
-
-#             elif structure == 'split':
-#                 block = f'splitblock_{int_contrast}'
-#                 kspace_pred = getattr(self.split_contrasts, block)[counter[3]](
-#                         kspace_pred, masked_kspace, mask, esp_maps, 
-#                         int_contrast = int_contrast,
-#                     )
-#             else:
-#                 raise ValueError(f'{structure} block structure not supported')
-        
-#         im_coil = fastmri.ifft2c(kspace_pred)
-#         im_comb = fastmri.complex_mul(im_coil, fastmri.complex_conj(esp_maps)).sum(
-#             dim=1, keepdim=True
-#         )
-        
-#         return kspace_pred, im_comb, self.logsigmas
-
-
-
 
 """
 =========== MTL_VarNet ============
 """
 
 class MTL_VarNet(nn.Module):
-    """
-    A full variational network model.
+    """Full variational MTL network model.
 
     This model applies a combination of soft data consistency with a U-Net
     regularizer. To use non-U-Net regularizers, use VarNetBock.
+    Multi-task learning architecture is constructed according to user input.
+
+    Currently, use must manually comment in / out the evaluation portion for
+    distributed GPU training; future releases will automate this.
+
+    Initialization Parameters
+    -------------------------
+    datasets : list
+        task names
+    blockstructures : list
+        elements must be in [trueshare, mhushare, attenshare, split]
+    share_etas : bool
+        Whether or not to share data consistency term, eta, amongst tasks
+    device : list
+        GPU names. Accommodates one or two GPUs.
+    chans : int, default = 18
+        Number of channels for cascade U-Net
+    pools : int, default = 4
+        Number of downsampling and upsampling layers for cascade U-Net
+    training : bool, default = True
+        Training or evaluation. This determines distributed training on GPUs
+
+    Forward parameters
+    ------------------
+    masked_kspace : tensor
+        Undersampled k-space input to the network
+    mask : tensor
+        0 / 1 mask for retrospectively undersampling k-space
+    esp_maps : tensor
+        ESPIRiT-estimated sensitivity maps
+
+    Returns
+    -------
+    kspace_pred : tensor
+        predicted k-space; to be compared to ground truth
+    img_comb : tensor
+        reconstructed image using kspace_pred
+    logsigmas : nn.ParameterList
+        homoscedastic uncertainty for individual tasks
+
+    References
+    ----------
+    https://github.com/facebookresearch/fastMRI/blob/main/fastmri/models
+
     """
 
     def __init__(
@@ -340,6 +347,7 @@ class MTL_VarNet(nn.Module):
         device: list,
         chans: int = 18,
         pools: int = 4,
+        training = True,
     ):
         super().__init__()
 
@@ -362,14 +370,14 @@ class MTL_VarNet(nn.Module):
             
             elif blockstructure == 'mhushare':
                 self.unrolled.append(VarNetBlockMTL(
-                    NormUnet(chans, pools, which_unet = 'mhushare', contrast_count = len(datasets),), 
+                    NormUnet(chans, pools, which_unet = 'mhushare', task_count = len(datasets),), 
                     datasets,
                     share_etas = share_etas,
                 ))
             
             elif blockstructure == 'attenshare':
                 self.unrolled.append(VarNetBlockMTL(
-                    NormUnet(chans, pools, which_unet = 'attenshare', contrast_count = len(datasets),), 
+                    NormUnet(chans, pools, which_unet = 'attenshare', task_count = len(datasets),), 
                     datasets,
                     share_etas = share_etas,
                 ))
@@ -385,23 +393,43 @@ class MTL_VarNet(nn.Module):
             else:
                 raise ValueError(f'{blockstructure} block structure not supported')
 
-        # gpu distributed training if we have two gpus (won't have more than 2 due to space)
-        if len(device) > 1:
-            self.seq1 = nn.ModuleList([
-                *self.unrolled[: len(blockstructures) // 2]
-            ]).to(device[1])
+        # 
 
-            self.seq2 = nn.ModuleList([
-                *self.unrolled[len(blockstructures) // 2 : len(blockstructures)] 
-            ]).to(device[0])
+        if training:
+            # gpu distributed training if we have two gpus (won't have more than 2 due to space)
+            if len(device) > 1:
+                self.seq1 = nn.ModuleList([
+                    *self.unrolled[: len(blockstructures) // 2]
+                ]).to(device[1])
 
+                self.seq2 = nn.ModuleList([
+                    *self.unrolled[len(blockstructures) // 2 : len(blockstructures)] 
+                ]).to(device[0])
+
+            else:
+                self.seq1 = nn.ModuleList([
+                    *self.unrolled[::]
+                ]).to(device[0])
+        
+
+        # evaluation only has one gpu
         else:
+            # # need to change this manually depending on if there were 
+            # # 1 or 2 GPUs used in training
+            # self.seq1 = nn.ModuleList([
+            #         *self.unrolled[: len(blockstructures) // 2]
+            #     ]).to(device[0])
+
+            # self.seq2 = nn.ModuleList([
+            #         *self.unrolled[len(blockstructures) // 2 : len(blockstructures)] 
+            #     ]).to(device[0])
+
             self.seq1 = nn.ModuleList([
-                *self.unrolled[::]
-            ]).to(device[0])
+                    *self.unrolled[::]
+                ]).to(device[0])
 
 
-        # uncert (specifically 2 contrasts)
+        # uncert (specifically 2 tasks)
         self.logsigmas = nn.ParameterList(
             nn.Parameter(torch.FloatTensor([-0.5]))
             for _ in datasets
@@ -413,17 +441,17 @@ class MTL_VarNet(nn.Module):
         masked_kspace: torch.Tensor, 
         mask: torch.Tensor,
         esp_maps: torch.Tensor,
-        contrast: str,
+        task: str,
     ) -> torch.Tensor:
   
 
         kspace_pred = masked_kspace.clone()
 
-        # contrast int for the block to determine which eta / 
+        # task int for the block to determine which eta / 
         try:
-            int_contrast = self.datasets.index(contrast)
+            int_task = self.datasets.index(task)
         except:
-            raise ValueError(f'{contrast} is not in self.datasets')
+            raise ValueError(f'{task} is not in self.datasets')
 
 
         # distributed training
@@ -435,7 +463,7 @@ class MTL_VarNet(nn.Module):
             for block in self.seq1:
                 kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
-                    int_contrast = int_contrast,
+                    int_task = int_task,
                 )
             
             # go to first gpu
@@ -444,7 +472,7 @@ class MTL_VarNet(nn.Module):
             for block in self.seq2:
                 kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
-                    int_contrast = int_contrast,
+                    int_task = int_task,
                 )
 
         else:
@@ -454,7 +482,7 @@ class MTL_VarNet(nn.Module):
             for block in self.seq1:
                 kspace_pred = block(
                     kspace_pred, masked_kspace, mask, esp_maps, 
-                    int_contrast = int_contrast,
+                    int_task = int_task,
                 )
 
         # training always ends on first gpu; important for loss functions

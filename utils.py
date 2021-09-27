@@ -1,22 +1,22 @@
+"""Docstring for utils.py
+
+Contains frequently-used losses/metrics, tensorboard utils, dictionaries
 """
-=== losses/metrics, tensorboard utils, model wrappers=== 
-"""
+
 import numpy as np
+import skimage.metrics
+
+import matplotlib.pyplot as plt
+plt.rcParams["figure.figsize"] = (10,10)
 
 import torch
 import torch.nn as nn
 
-import fastmri_unet
-
 from fastmri.data import transforms
-
 import sigpy as sp
 from sigpy import from_pytorch
 
-import matplotlib.pyplot as plt
-plt.rcParams["figure.figsize"] = (10,10)
-import skimage.metrics
-
+import unet
 
 
 """
@@ -25,11 +25,21 @@ import skimage.metrics
 """
 
 def criterion(im_fs: torch.Tensor, im_us: torch.Tensor):
-    '''
-    @parameter im_us: undersampled image (2D)
-    @parameter im_fs: fully sampled image (2D)
-    should be on GPU device for fast computation
-    '''  
+    """l1 loss
+    
+    Parameters
+    ----------
+    im_fs : tensor
+        fully sampled image (2D)
+    im_us : tensor
+        undersampled image (2D)
+    
+    Returns
+    -------
+    scalar
+        l1 loss, as implemented by nn.L1Loss
+
+    """  
     # use l1 loss between two images
     criterion = nn.L1Loss()
     
@@ -37,11 +47,27 @@ def criterion(im_fs: torch.Tensor, im_us: torch.Tensor):
     return criterion(im_us, im_fs)
 
 def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):
-    '''
-    @parameter im_us: undersampled image (2D)
-    @parameter im_fs: fully sampled image (2D)
-    should be on GPU device for fast computation
-    '''
+    """SSIM, pSNR, nRMSE on magnitude images.
+
+    Normalization between 0 and 1 for SSIM only.
+
+    Parameters
+    ----------
+    im_fs : tensor
+        fully sampled image (2D)
+    im_us : tensor
+        undersampled image (2D)
+    
+    Returns
+    -------
+    ssim : scalar
+    psnr : scalar
+    nrmse : scalar
+
+    See Also : 
+    skimage.metrics
+
+    """
 
     # change to ndarray
     im_us = transforms.tensor_to_complex_np(im_us.cpu().detach())
@@ -80,145 +106,16 @@ def metrics(im_fs: torch.Tensor, im_us: torch.Tensor):
     
     return ssim, psnr, nrmse
 
-
-"""
-=========== Hook (RETIRED) ============= 
-    hooks for gradient accumulation
-    involved with dividing gradient of
-    split / shared layers properly
-"""
-class Module_Hook():
-    def __init__(
-        self, 
-        module: nn.Module, 
-        name: str = None,
-        accumulated_by: int = None,
-        ):
-        
-        assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
-        if accumulated_by == 0:
-            accumulated_by = 1
-        accumulated_by = float(accumulated_by)
-        self.accumulated_by = accumulated_by
-        self.name = name
-
-        self.hook = module.register_full_backward_hook(self.hook_fn)
-        
-
-    def hook_fn(self, module, input, output):
-        # print (f' using module {self.name} hook divided by {self.accumulated_by}')
-        if type(input[0]) == torch.Tensor:
-            return tuple(tensor / self.accumulated_by for tensor in input)
-  
-
-    def close(self):
-        self.hook.remove()
-
-
-class Tensor_Hook():
-    def __init__(
-        self, 
-        tensor: torch.Tensor,
-        name: str = None, 
-        accumulated_by: int = None,
-        ):
-        assert type(accumulated_by) == int, 'accumulated_by must be an int, not None type'
-        if accumulated_by == 0:
-            accumulated_by = 1
-
-        accumulated_by = float(accumulated_by)
-        self.accumulated_by = 1
-        self.hook = tensor.register_hook(self.hook_fn)
-        self.name = name
-        tensor.retain_grad()
-
-    def hook_fn(self, tensor):
-        print (f' using tensor hook {self.name}, divided by {self.accumulated_by}')
-        return tensor / self.accumulated_by
-
-    def close(self):
-        self.hook.remove()
-
-def configure_hooks(model, contrast_batches):
-    '''
-    full backward hooks for gradient accumulation
-    creates hooks at all levels:
-        MTL_VarNet (uncert)
-        VarNetBlockMTL (etas)
-        Unet levels (shared encoder vs split/shared decoder)
-    '''
-    # register hooks for accumulated gradient
-    hooks = []
-   
-    # uncertainty at MTL_VarNet level
-    hooks.extend([
-        Tensor_Hook(
-            logsigma, 
-            name = f'uncert hook {idx_contrast}',
-            accumulated_by = contrast_batches[idx_contrast]
-            )
-        for idx_contrast, logsigma in enumerate(model.logsigmas)
-    ])
-    
-    # etas
-    for idx_block, block in enumerate(model.allblocks):  
-        hooks.extend([
-            Tensor_Hook(
-                eta, 
-                name = f'eta_{idx_block}', 
-                accumulated_by = sum(contrast_batches) if model.share_etas else contrast_batches[idx_contrast], 
-                )
-            for idx_contrast, eta in enumerate(block.etas)
-        ])
-    
-    # encoder / decoders
-
-    for name, module in model.named_modules():
-        
-        # initialize create_hook bool
-        create_hook = False
-
-        if type(module) == fastmri_unet.ConvBlock or type(module) == fastmri_unet.TransposeConvBlock:
-            create_hook = True
-
-        if create_hook:
-            if 'logsigmas' in name or 'etas' in name:
-                # we've alredy done these hooks using tensorhooks. Don't go to ModuleHook
-                continue
-
-            elif 'splitblock' in name:
-                # '.splitblock_{int_contrast}.'
-                int_contrast = int(name.split('splitblock_')[1].split('.')[0])
-                accumulated_by = contrast_batches[int_contrast]
-                
-            elif 'splitdecoder' in name:
-                # '_{int_contrast}_splitdecoder.'
-                int_contrast = int(name.split('_splitdecoder')[0].split('_')[-1])
-                accumulated_by = contrast_batches[int_contrast]
-
-            elif 'shared' in name:
-                accumulated_by = sum(contrast_batches)
-        
-            else:
-                raise ValueError (f'unrecognized name {name}')
-
-            hooks.extend([
-                Module_Hook(
-                    module,
-                    f'{name}',
-                    accumulated_by = accumulated_by,
-                )
-            ])    
-        
-
-
-    return hooks    
-
 """
 =========== Misc ============= 
     naming for block structure (used in evaluate and MTL_VarNet)
 """
+
 def label_blockstructures(blockstructures):
+    """Conversion between long-hand and short-hand
+    for MTL block structures.
+    """
+
     conversion = {
         'trueshare' : 'I',
         'mhushare' : 'Y',
@@ -231,6 +128,10 @@ def label_blockstructures(blockstructures):
     return ''.join(labels)
 
 def interpret_blockstructures(blockstructures):
+    """Conversion between short-hand and long-hand
+    for MTL block structures.
+    """
+
     conversion = {
         'I' : 'trueshare',
         'Y' : 'mhushare',
@@ -250,11 +151,22 @@ def interpret_blockstructures(blockstructures):
 """
 
 def _count_parameters(model):
+    """Count the number of trainable parameters in the network
+    """
     return sum(
         p.numel() for p in model.parameters() if p.requires_grad
     )
 
 def _test_result(im_fs: torch.Tensor, im_us: torch.Tensor) -> np.ndarray:
+    """Prepares MR images for viewing.
+
+    - Crops MR images to 360 x 320.
+    - Creates quadrant structure:
+        network recon | ground truth
+        --------------|------------------
+        error map     | error map (black)
+
+    """
 
     with torch.no_grad():
         im_us = from_pytorch(im_us.cpu().detach(),iscomplex = True)
@@ -276,6 +188,21 @@ def _test_result(im_fs: torch.Tensor, im_us: torch.Tensor) -> np.ndarray:
 
 
 def plot_quadrant(im_fs: torch.Tensor, im_us: torch.Tensor):
+    """Plot the reconstructed image and ground truth in matplotlib
+
+    Parameters
+    ----------
+    im_fs : tensor
+        fully sampled image (2D)
+    im_us : tensor
+        undersampled image (2D)
+    
+    Returns
+    -------
+    fig : plt.figure()
+        matplotlib figure ready for rendering
+
+    """
     fig = plt.figure()
     plt.imshow(_test_result(im_fs, im_us), cmap = 'gray', vmax = 2.5) # or normalize between 0-1
     plt.close(fig)
@@ -285,10 +212,40 @@ def plot_quadrant(im_fs: torch.Tensor, im_us: torch.Tensor):
 
 
 
-def write_tensorboard(writer, cost, iteration, epoch, model, ratio, opt, weights = None):
-    '''
-    weights = None implies STL; weights should be dict of weights
-    '''
+def write_tensorboard(
+    writer, cost, iteration, epoch, model, ratio, opt, weights = None
+    ):
+
+    """Tensorboard writer for one or two tasks
+
+    Parameters
+    writer : tensorboard SummaryWriter
+        contains directory for tensorboard logs
+    cost : dict
+        each key is a task, and each value is an array of length 8
+        containing loss / metrics information for training and validation
+    iteration : int
+        iteration in training; i.e. counts each forward pass
+    epoch : int
+        epoch of training; i.e. each time there is a full pass of all data
+    model : model-like object
+        Weights are loaded
+    ratio : str
+        i.e. N=32_N=481 for task ratios
+    opt : argparse ArgumentParser
+        Contains user-defined parameters.
+        See documentation in stl.py or mtl.py for more information.
+    weights : dict, default = None 
+        None implies STL; keys are tasks, values are the task-weight for loss
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Future versions will allow for writing for more than two tasks.
+    """
     
     if epoch == 0:
         writer.add_text(
@@ -298,55 +255,59 @@ def write_tensorboard(writer, cost, iteration, epoch, model, ratio, opt, weights
             
     if epoch >= 2:
         if len(opt.datasets) == 1:
-            write_tensorboard_one_contrasts(
+            _write_tensorboard_one_tasks(
                 writer, cost, iteration, ratio, opt
             )
         else:
-            write_tensorboard_two_contrasts(
+            _write_tensorboard_two_tasks(
                 writer, cost, iteration, ratio, opt, weights = weights
             )
 
 
-def write_tensorboard_two_contrasts(writer, cost, iteration, ratio, opt, weights):
-    # write to tensorboard ###opt###
-    contrast_1, contrast_2 = opt.datasets
+def _write_tensorboard_two_tasks(writer, cost, iteration, ratio, opt, weights):
+    """Private function that write_tensorboard calls.
+
+    Writers to tensorboard for two tasks.
+    """
+
+    task_1, task_2 = opt.datasets
 
     writer.add_scalars(
         f'{ratio}/l1', {
-            f'train/{contrast_1}' : cost[contrast_1][0],
-            f'val/{contrast_1}' : cost[contrast_1][4],
-            f'train/{contrast_2}' : cost[contrast_2][0],
-            f'val/{contrast_2}' : cost[contrast_2][4],
+            f'train/{task_1}' : cost[task_1][0],
+            f'val/{task_1}' : cost[task_1][4],
+            f'train/{task_2}' : cost[task_2][0],
+            f'val/{task_2}' : cost[task_2][4],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/ssim', {
-            f'train/{contrast_1}' : cost[contrast_1][1],
-            f'val/{contrast_1}' : cost[contrast_1][5],
-            f'train/{contrast_2}' : cost[contrast_2][1],
-            f'val/{contrast_2}' : cost[contrast_2][5],
+            f'train/{task_1}' : cost[task_1][1],
+            f'val/{task_1}' : cost[task_1][5],
+            f'train/{task_2}' : cost[task_2][1],
+            f'val/{task_2}' : cost[task_2][5],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/psnr', {
-            f'train/{contrast_1}' : cost[contrast_1][2],
-            f'val/{contrast_1}' : cost[contrast_1][6],
-            f'train/{contrast_2}' : cost[contrast_2][2],
-            f'val/{contrast_2}' : cost[contrast_2][6],
+            f'train/{task_1}' : cost[task_1][2],
+            f'val/{task_1}' : cost[task_1][6],
+            f'train/{task_2}' : cost[task_2][2],
+            f'val/{task_2}' : cost[task_2][6],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/nrmse', {
-            f'train/{contrast_1}' : cost[contrast_1][3],
-            f'val/{contrast_1}' : cost[contrast_1][7],
-            f'train/{contrast_2}' : cost[contrast_2][3],
-            f'val/{contrast_2}' : cost[contrast_2][7],
+            f'train/{task_1}' : cost[task_1][3],
+            f'val/{task_1}' : cost[task_1][7],
+            f'train/{task_2}' : cost[task_2][3],
+            f'val/{task_2}' : cost[task_2][7],
         }, 
         iteration
     )
@@ -386,45 +347,49 @@ def write_tensorboard_two_contrasts(writer, cost, iteration, ratio, opt, weights
     if weights is not None:
         writer.add_scalars(
             f'{ratio}/weighting', {
-                f'{contrast_1}' : weights[contrast_1],
-                f'{contrast_2}' : weights[contrast_2],
+                f'{task_1}' : weights[task_1],
+                f'{task_2}' : weights[task_2],
             }, 
             iteration
         )
 
     
-def write_tensorboard_one_contrasts(writer, cost, iteration, ratio, opt):
-    #write to tensorboard ###opt###
-    contrast_1 = opt.datasets[0]
+def _write_tensorboard_one_tasks(writer, cost, iteration, ratio, opt):
+    """Private function that write_tensorboard calls.
+
+    Writers to tensorboard for one task.
+    """
+
+    task_1 = opt.datasets[0]
         
     writer.add_scalars(
         f'{ratio}/l1', {
-            f'train/{contrast_1}' : cost[contrast_1][0],
-            f'val/{contrast_1}' : cost[contrast_1][4],
+            f'train/{task_1}' : cost[task_1][0],
+            f'val/{task_1}' : cost[task_1][4],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/ssim', {
-            f'train/{contrast_1}' : cost[contrast_1][1],
-            f'val/{contrast_1}' : cost[contrast_1][5],
+            f'train/{task_1}' : cost[task_1][1],
+            f'val/{task_1}' : cost[task_1][5],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/psnr', {
-            f'train/{contrast_1}' : cost[contrast_1][2],
-            f'val/{contrast_1}' : cost[contrast_1][6],
+            f'train/{task_1}' : cost[task_1][2],
+            f'val/{task_1}' : cost[task_1][6],
         }, 
         iteration
     )
 
     writer.add_scalars(
         f'{ratio}/nrmse', {
-            f'train/{contrast_1}' : cost[contrast_1][3],
-            f'val/{contrast_1}' : cost[contrast_1][7],
+            f'train/{task_1}' : cost[task_1][3],
+            f'val/{task_1}' : cost[task_1][7],
         }, 
         iteration
     )
