@@ -16,3 +16,4 @@ runs_sens/
 *.html
 *.ipynb
 .DS_Store
+.ipynb_checkpoints
