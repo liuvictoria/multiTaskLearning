@@ -67,6 +67,8 @@ python3 deleteDuplicateRuns.py --runnames MTL_uncert_gradacc_varnetIIYYYYYYYYYY_
 python3 getusamp.py --datasets div_coronal_pd_fs div_coronal_pd --device cuda:2 --plotdir usamp
 ```
 
+The ESPIRiT folder contains scripts to estimate sensitivity maps.
+
 ## Flags
 
 In the following tables, we list _some_ flags that may be of interest to you. The set of required flags differ amongst scripts, and there may be default values for some of the flags. Please consult the extensive documentation within the code for this additional information.
@@ -144,7 +146,7 @@ At the inference step, you can also scroll through entire MRI volumes to see how
 
 ![evaluation, interactive view of MRI slices on tensorboard](https://user-images.githubusercontent.com/66798771/134854191-b7934fb6-0de0-4eea-a86c-dc3817b2fbd4.gif)
 
-## Acknowledgments 
+## Acknowledgments
 We thank the Stanford MRSRL group for their insightful comments during group meetings.
 
 ## Citation
