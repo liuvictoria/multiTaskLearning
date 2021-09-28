@@ -98,7 +98,7 @@ In the following tables, we list _some_ flags that may be of interest to you. Th
 | `datasets` | names of relevant tasks | mtl, stl, evaluate |
 | `datadir` | data root directory; where are datasets contained | mtl, stl, evaluate |
 | `scarcities` | number of samples in second task will be decreased by 1/2^N | mtl, stl |
-| `accelerationse` | list of undersampling factor of k-space for training | mtl, stl, evaluate |
+| `accelerations` | list of undersampling factor of k-space for training | mtl, stl, evaluate |
 | `centerfracs` | list of center fractions sampled of k-space for training | mtl, stl, evaluate |
 
 
