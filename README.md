@@ -148,6 +148,7 @@ At the inference step, you can also scroll through entire MRI volumes to see how
 
 ## Acknowledgments
 We thank the Stanford MRSRL group for their insightful comments during group meetings.
+We also thank [Hammernik et al.](https://arxiv.org/abs/1704.00447) for making the MRI data publicly available. We are indebted to the volunteers who consented to have their MRIs available for research.
 
 ## Citation
 If you found our repository or paper helpful, please cite:
